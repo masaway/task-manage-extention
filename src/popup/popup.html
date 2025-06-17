@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Time Tracker</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>Task Time Tracker</h1>
+        </header>
+
+        <section class="current-timers">
+            <div class="section-header">
+                <h2>実行中のタスク</h2>
+                <button id="clearAllTimers" class="btn-clear-all" title="全てのタイマーをクリア" style="display: none;">
+                    全削除
+                </button>
+            </div>
+            <div id="activeTimers" class="timer-list">
+                <div class="no-timers">実行中のタスクはありません</div>
+            </div>
+        </section>
+
+        <section class="time-summary">
+            <h2>時間サマリー</h2>
+            <div class="summary-grid">
+                <div class="summary-item">
+                    <span class="label">今日</span>
+                    <span id="todayTime" class="time">0分</span>
+                </div>
+                <div class="summary-item">
+                    <span class="label">今週</span>
+                    <span id="weekTime" class="time">0分</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="task-breakdown">
+            <h2>今日のタスク別時間</h2>
+            <div id="todayTasks" class="task-list">
+                <div class="no-tasks">まだタスクがありません</div>
+            </div>
+        </section>
+
+        <section class="quick-actions">
+            <button id="settingsBtn" class="btn btn-secondary">設定</button>
+            <button id="reportBtn" class="btn btn-primary">レポート</button>
+        </section>
+
+        <div id="settingsModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>設定</h3>
+                    <button id="closeSettings" class="close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="setting-group">
+                        <h4>Backlog ステータス設定</h4>
+                        <div class="status-config">
+                            <label>計測開始ステータス:</label>
+                            <input type="text" id="backlogStart" name="backlogStart" placeholder="now">
+                        </div>
+                        <p class="help-text">このステータスから他のステータスに変更されるまでの時間を計測します</p>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <h4>GitHub ステータス設定</h4>
+                        <div class="status-config">
+                            <label>計測開始ステータス:</label>
+                            <input type="text" id="githubStart" name="githubStart" placeholder="now">
+                        </div>
+                        <p class="help-text">このステータスから他のステータスに変更されるまでの時間を計測します</p>
+                    </div>
+
+                    <div class="setting-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="notifications" name="notifications">
+                            通知を有効にする
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="saveSettings" class="btn btn-primary">保存</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="reportModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>作業時間レポート</h3>
+                    <button id="closeReport" class="close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="reportContent">
+                        <div class="loading">レポートを読み込み中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

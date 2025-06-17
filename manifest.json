@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Task Time Tracker",
+  "version": "1.0.0",
+  "description": "Automatically track time spent on tasks in Backlog and GitHub",
+  
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "webRequest"
+  ],
+  
+  "host_permissions": [
+    "*://*.backlog.jp/*",
+    "*://*.backlog.com/*",
+    "*://github.com/*"
+  ],
+  
+  "background": {
+    "service_worker": "src/scripts/background.js"
+  },
+  
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.backlog.jp/*",
+        "*://*.backlog.com/*",
+        "file:///*"
+      ],
+      "js": ["src/scripts/content-backlog-v8.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://github.com/*"
+      ],
+      "js": ["src/scripts/content-github-v3.js"],
+      "run_at": "document_start"
+    }
+  ],
+  
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "Task Time Tracker"
+  },
+  
+  "devtools_page": "src/devtools/devtools.html",
+  
+  "icons": {
+    "16": "src/icons/icon16.svg",
+    "48": "src/icons/icon48.svg",
+    "128": "src/icons/icon128.svg"
+  }
+}
