@@ -7,7 +7,6 @@ class BacklogTaskTrackerV8 {
       mutation: true,
       pointer: true
     };
-    this.debugMode = true;
     this.detectionStats = {
       network: 0,
       sortable: 0,
@@ -15,29 +14,19 @@ class BacklogTaskTrackerV8 {
       pointer: 0
     };
 
-    this.log('🚀 BacklogTaskTrackerV8 initializing...');
-    
     this.setupNetworkMonitoring();
     this.setupSortableMonitoring();
     this.setupMutationObserver();
     this.setupPointerMonitoring();
     this.initializeTaskStates();
-    
-    this.log('✅ All monitoring systems active');
   }
 
-  log(message, data = null) {
-    if (this.debugMode) {
-      console.log(`[Backlog V8] ${message}`, data || '');
-    }
-  }
 
   // ==========================================
   // 1. ネットワーク監視 (最も確実な方法)
   // ==========================================
   
   setupNetworkMonitoring() {
-    this.log('🌐 Setting up network monitoring...');
     
     // XMLHttpRequestの監視
     this.interceptXHR();
@@ -114,7 +103,6 @@ class BacklogTaskTrackerV8 {
   handleNetworkResponse(method, url, responseText, requestData) {
     if (!this.isBacklogAPICall(url)) return;
     
-    this.log(`📡 Network detection - ${method} ${url}`);
     this.detectionStats.network++;
     
     try {
@@ -191,7 +179,6 @@ class BacklogTaskTrackerV8 {
     const oldStatus = this.taskStates.get(taskId);
     
     if (oldStatus && oldStatus !== currentStatus) {
-      this.log(`🎯 Network detected status change: ${issue.issueKey} ${oldStatus} → ${currentStatus}`);
       
       this.notifyStatusChange({
         taskId: taskId,
@@ -230,7 +217,6 @@ class BacklogTaskTrackerV8 {
             const oldStatus = this.taskStates.get(taskId);
             
             if (oldStatus && oldStatus !== statusName) {
-              this.log(`🎯 Network form detected status change: ${issueKey} ${oldStatus} → ${statusName}`);
               
               this.notifyStatusChange({
                 taskId: taskId,
@@ -248,7 +234,6 @@ class BacklogTaskTrackerV8 {
         }
       }
     } catch (error) {
-      this.log('Error parsing form data:', error);
     }
   }
 
@@ -257,7 +242,6 @@ class BacklogTaskTrackerV8 {
   // ==========================================
   
   setupSortableMonitoring() {
-    this.log('🔄 Setting up sortable monitoring...');
     
     // jQuery が読み込まれるまで待機
     this.waitForjQuery(() => {
@@ -273,7 +257,6 @@ class BacklogTaskTrackerV8 {
         this.waitForjQuery(callback, maxAttempts - 1);
       }, 100);
     } else {
-      this.log('⚠️ jQuery UI not found, skipping sortable monitoring');
     }
   }
 
@@ -309,29 +292,24 @@ class BacklogTaskTrackerV8 {
       return originalSortable.apply(this, [options, ...args]);
     };
     
-    this.log('✅ Sortable monitoring active');
   }
 
   handleSortableStop(event, ui) {
-    this.log('🔄 Sortable stop detected');
     this.detectionStats.sortable++;
     this.processSortableChange(event, ui);
   }
 
   handleSortableUpdate(event, ui) {
-    this.log('🔄 Sortable update detected');
     this.detectionStats.sortable++;
     this.processSortableChange(event, ui);
   }
 
   handleSortableStopDirect(event, ui) {
-    this.log('🔄 Sortable stop (direct) detected');
     this.detectionStats.sortable++;
     this.processSortableChange(event, ui);
   }
 
   handleSortableUpdateDirect(event, ui) {
-    this.log('🔄 Sortable update (direct) detected');
     this.detectionStats.sortable++;
     this.processSortableChange(event, ui);
   }
@@ -349,7 +327,6 @@ class BacklogTaskTrackerV8 {
       setTimeout(() => {
         const newTask = this.extractTaskFromElement(item);
         if (newTask && newTask.status !== oldStatus) {
-          this.log(`🎯 Sortable detected status change: ${task.issueKey} ${oldStatus} → ${newTask.status}`);
           
           this.notifyStatusChange({
             taskId: task.id,
@@ -372,7 +349,6 @@ class BacklogTaskTrackerV8 {
   // ==========================================
   
   setupMutationObserver() {
-    this.log('👁️ Setting up mutation observer...');
     
     const observer = new MutationObserver((mutations) => {
       this.handleMutations(mutations);
@@ -391,7 +367,6 @@ class BacklogTaskTrackerV8 {
           'data-rbd-drag-handle-draggable-id', 'style'
         ]
       });
-      this.log('✅ Mutation observer active');
     };
     
     if (document.body) {
@@ -575,9 +550,8 @@ class BacklogTaskTrackerV8 {
     if (!task) return;
     
     const oldStatus = this.taskStates.get(task.id);
+    
     if (oldStatus && oldStatus !== task.status) {
-      this.log(`🎯 Mutation detected status change: ${task.issueKey} ${oldStatus} → ${task.status}`);
-      
       this.notifyStatusChange({
         taskId: task.id,
         oldStatus: oldStatus,
@@ -597,7 +571,6 @@ class BacklogTaskTrackerV8 {
   // ==========================================
   
   setupPointerMonitoring() {
-    this.log('👆 Setting up pointer monitoring...');
     
     this.pointerStartTask = null;
     
@@ -609,7 +582,6 @@ class BacklogTaskTrackerV8 {
       this.handlePointerUp(e);
     }, true);
     
-    this.log('✅ Pointer monitoring active');
   }
 
   handlePointerDown(e) {
@@ -653,7 +625,6 @@ class BacklogTaskTrackerV8 {
       const currentTask = this.extractTaskFromElement(currentElement);
       
       if (currentTask && currentTask.status !== originalTask.status) {
-        this.log(`🎯 Pointer detected status change: ${originalTask.issueKey} ${originalTask.status} → ${currentTask.status}`);
         
         this.notifyStatusChange({
           taskId: originalTask.id,
@@ -817,46 +788,23 @@ class BacklogTaskTrackerV8 {
   determineTaskStatus(element) {
     // 実際のBacklog HTML構造に基づく動的ステータス判定
     
-    if (this.debugMode) {
-      this.log(`🔍 determineTaskStatus: starting for element`, element);
-    }
-    
     // 1. 最も確実な方法：親のsection要素の列ヘッダーから取得
     const sectionElement = element.closest('section');
     if (sectionElement) {
-      if (this.debugMode) {
-        this.log(`🔍 Found section element`);
-      }
-      
-      // 実際のHTML構造に基づくより精密なセレクタ
       const statusSelectors = [
-        // メインのステータステキスト（実際のHTML構造）
         '.SlotHead > div:nth-child(2) > span',
         '.SlotHead div:not(.expand) span:not(.StatusIcon)',
         '.SlotHead span:not(.StatusIcon):not(.foldingIcon):not(.CardLength)',
-        // フォールバックセレクタ
         '.SlotHead span',
         'h3 span:not(.StatusIcon)'
       ];
       
       for (const selector of statusSelectors) {
         const spans = sectionElement.querySelectorAll(selector);
-        if (this.debugMode) {
-          this.log(`🔍 Trying selector: ${selector}, found ${spans.length} elements`);
-        }
-        
         for (const span of spans) {
           const statusText = span.textContent?.trim();
-          if (this.debugMode) {
-            this.log(`🔍 Checking span text: "${statusText}"`);
-          }
-          
           if (statusText && this.isValidStatus(statusText)) {
-            const normalized = this.normalizeStatus(statusText);
-            if (this.debugMode) {
-              this.log(`✅ Found valid status via section: "${statusText}" -> "${normalized}"`);
-            }
-            return normalized;
+            return this.normalizeStatus(statusText);
           }
         }
       }
@@ -866,11 +814,6 @@ class BacklogTaskTrackerV8 {
     const statusContainer = element.closest('[data-statusid]');
     if (statusContainer) {
       const statusId = statusContainer.getAttribute('data-statusid');
-      if (this.debugMode) {
-        this.log(`🔍 Found status container with data-statusid: ${statusId}`);
-      }
-      
-      // 同じdata-statusidを持つ列のヘッダーを探す
       const columnHeaders = document.querySelectorAll('section .SlotHead');
       for (const header of columnHeaders) {
         const section = header.closest('section');
@@ -888,11 +831,7 @@ class BacklogTaskTrackerV8 {
             if (statusSpan) {
               const statusText = statusSpan.textContent?.trim();
               if (statusText && this.isValidStatus(statusText)) {
-                const normalized = this.normalizeStatus(statusText);
-                if (this.debugMode) {
-                  this.log(`✅ Found valid status via data-statusid: "${statusText}" -> "${normalized}"`);
-                }
-                return normalized;
+                return this.normalizeStatus(statusText);
               }
             }
           }
@@ -909,41 +848,20 @@ class BacklogTaskTrackerV8 {
                         current.getAttribute('data-column');
       
       if (dataStatus && this.isValidStatus(dataStatus)) {
-        const normalized = this.normalizeStatus(dataStatus);
-        if (this.debugMode) {
-          this.log(`✅ Found valid status via data attribute: "${dataStatus}" -> "${normalized}"`);
-        }
-        return normalized;
+        return this.normalizeStatus(dataStatus);
       }
       
       current = current.parentElement;
     }
     
     // 4. 位置ベースの判定（フォールバック）
-    if (this.debugMode) {
-      this.log(`🔍 Falling back to position-based detection`);
-    }
-    const positionStatus = this.getStatusFromPosition(element);
-    if (this.debugMode) {
-      this.log(`📍 Position-based result: "${positionStatus}"`);
-    }
-    return positionStatus;
+    return this.getStatusFromPosition(element);
   }
 
   getStatusFromPosition(element) {
     try {
       const rect = element.getBoundingClientRect();
       
-      if (this.debugMode) {
-        this.log(`📍 getStatusFromPosition: element rect`, {
-          left: rect.left,
-          right: rect.right,
-          top: rect.top,
-          bottom: rect.bottom
-        });
-      }
-      
-      // 実際のBacklog HTML構造に基づくヘッダー検索
       const columnHeaders = document.querySelectorAll([
         'section .SlotHead',
         'section h3',
@@ -954,28 +872,11 @@ class BacklogTaskTrackerV8 {
         '*[class*="column"] h3'
       ].join(', '));
       
-      if (this.debugMode) {
-        this.log(`📍 Found ${columnHeaders.length} potential column headers`);
-      }
-      
       let bestMatch = null;
       let bestDistance = Infinity;
-      let bestMatchInfo = null;
       
       for (const header of columnHeaders) {
         const headerRect = header.getBoundingClientRect();
-        
-        if (this.debugMode) {
-          this.log(`📍 Checking header`, {
-            headerRect: {
-              left: headerRect.left,
-              right: headerRect.right,
-              top: headerRect.top,
-              bottom: headerRect.bottom
-            },
-            headerText: header.textContent?.trim()
-          });
-        }
         
         // 水平方向で重複確認（より柔軟な判定）
         const horizontalCenter = (rect.left + rect.right) / 2;
@@ -987,22 +888,13 @@ class BacklogTaskTrackerV8 {
         const verticallyRelevant = headerRect.top <= rect.bottom && headerRect.bottom >= rect.top - 500; // より広い範囲
         
         if (horizontalMatch && verticallyRelevant) {
-          
-          // 距離を計算（ヘッダーからカードまでの垂直距離）
           let distance;
           if (headerRect.bottom <= rect.top) {
-            // ヘッダーがカードの上にある場合
             distance = rect.top - headerRect.bottom;
           } else if (headerRect.top >= rect.bottom) {
-            // ヘッダーがカードの下にある場合（通常はありえないが）
-            distance = headerRect.top - rect.bottom + 1000; // ペナルティを追加
+            distance = headerRect.top - rect.bottom + 1000;
           } else {
-            // 重複している場合（理想的）
             distance = 0;
-          }
-          
-          if (this.debugMode) {
-            this.log(`📍 Header overlaps, distance: ${distance}`);
           }
           
           if (distance < bestDistance) {
@@ -1040,37 +932,18 @@ class BacklogTaskTrackerV8 {
             if (headerText && this.isValidStatus(headerText)) {
               bestMatch = headerText;
               bestDistance = distance;
-              bestMatchInfo = {
-                headerElement: header,
-                distance: distance,
-                statusText: headerText
-              };
-              
-              if (this.debugMode) {
-                this.log(`🔎 New best match found: "${headerText}" (distance: ${distance})`);
-              }
             }
           }
         }
       }
       
       if (bestMatch) {
-        const normalized = this.normalizeStatus(bestMatch);
-        if (this.debugMode) {
-          this.log(`✅ Position-based match found: "${bestMatch}" -> "${normalized}"`, bestMatchInfo);
-        }
-        return normalized;
+        return this.normalizeStatus(bestMatch);
       }
       
-      if (this.debugMode) {
-        this.log(`❌ No position-based match found`);
-      }
       return 'Unknown';
       
     } catch (error) {
-      if (this.debugMode) {
-        this.log(`❌ Error in getStatusFromPosition:`, error);
-      }
       return 'Unknown';
     }
   }
@@ -1153,20 +1026,18 @@ class BacklogTaskTrackerV8 {
     return urlMatch ? urlMatch[1] : 'Unknown Project';
   }
 
+
   // ==========================================
   // 初期化とステータス変更通知
   // ==========================================
   
   async initializeTaskStates() {
-    this.log('🔄 Initializing task states...');
-    
     const initializeWhenReady = () => {
       try {
         const selectors = [
           '*[data-issue-key]',
           '*[draggable="true"]', 
           '*[class*="card"]',
-          '*[class*="issue"]',
           '*[data-react-beautiful-dnd-draggable]'
         ];
         
@@ -1177,19 +1048,17 @@ class BacklogTaskTrackerV8 {
         });
         
         const uniqueElements = [...new Set(allTaskElements)];
-        const elementsToProcess = uniqueElements.slice(0, 100);
         
-        elementsToProcess.forEach((element) => {
+        uniqueElements.forEach((element) => {
           const task = this.extractTaskFromElement(element);
           if (task) {
             this.taskStates.set(task.id, task.status);
+            this.notifyTaskInitialized(task);
           }
         });
         
-        this.log(`✅ Initialized ${this.taskStates.size} task states`);
-        
       } catch (error) {
-        this.log('Error initializing task states:', error);
+        console.log('[Backlog] Error initializing task states:', error);
       }
     };
     
@@ -1200,34 +1069,45 @@ class BacklogTaskTrackerV8 {
     }
   }
 
+  notifyTaskInitialized(task) {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'TASK_INITIALIZED',
+        data: {
+          taskId: task.id,
+          status: task.status,
+          service: 'backlog',
+          taskTitle: task.title,
+          projectName: this.getProjectName(),
+          issueKey: task.issueKey,
+          spaceId: task.spaceId
+        }
+      });
+    } catch (error) {
+      console.log('[Backlog] Error notifying task initialization:', error);
+    }
+  }
+
   notifyStatusChange(changeInfo) {
-    this.log(`🎯 Status change detected via ${changeInfo.detectionMethod}: ${changeInfo.issueKey} ${changeInfo.oldStatus} → ${changeInfo.newStatus}`);
-    
-    const changeData = {
-      taskId: changeInfo.taskId,
-      newStatus: changeInfo.newStatus,
-      oldStatus: changeInfo.oldStatus,
-      service: 'backlog',
-      taskTitle: changeInfo.taskTitle,
-      projectName: this.getProjectName(),
-      issueKey: changeInfo.issueKey,
-      spaceId: changeInfo.spaceId,
-      detectionMethod: changeInfo.detectionMethod
-    };
+    console.log(`[Backlog] ${changeInfo.issueKey}: ${changeInfo.oldStatus} → ${changeInfo.newStatus}`);
     
     try {
       chrome.runtime.sendMessage({
         type: 'TASK_STATUS_CHANGED',
-        data: changeData
-      }, (response) => {
-        if (chrome.runtime.lastError) {
-          this.log('Error sending message:', chrome.runtime.lastError);
-        } else {
-          this.log('✅ Status change notification sent');
+        data: {
+          taskId: changeInfo.taskId,
+          newStatus: changeInfo.newStatus,
+          oldStatus: changeInfo.oldStatus,
+          service: 'backlog',
+          taskTitle: changeInfo.taskTitle,
+          projectName: this.getProjectName(),
+          issueKey: changeInfo.issueKey,
+          spaceId: changeInfo.spaceId,
+          detectionMethod: changeInfo.detectionMethod
         }
       });
     } catch (error) {
-      this.log('Error notifying status change:', error);
+      console.log('[Backlog] Error notifying status change:', error);
     }
   }
 
@@ -1252,7 +1132,6 @@ class BacklogTaskTrackerV8 {
   }
 
   forceTaskScan() {
-    this.log('🔄 Force scanning all tasks...');
     this.taskStates.clear();
     this.initializeTaskStates();
   }
@@ -1260,7 +1139,6 @@ class BacklogTaskTrackerV8 {
   toggleDetectionMethod(method, enabled) {
     if (this.detectionMethods.hasOwnProperty(method)) {
       this.detectionMethods[method] = enabled;
-      this.log(`🔧 Detection method ${method} ${enabled ? 'enabled' : 'disabled'}`);
     }
   }
 }

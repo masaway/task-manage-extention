@@ -57,6 +57,10 @@ class TaskTimeTracker {
         case 'GET_SETTINGS':
           this.getSettingsForContentScript(sendResponse);
           return true;
+        case 'TASK_INITIALIZED':
+          this.handleTaskInitialized(message.data);
+          sendResponse({ success: true, message: 'Task initialization received' });
+          break;
         default:
           console.log('[Background] Unknown message type:', message.type);
           sendResponse({ success: false, message: 'Unknown message type' });
@@ -91,9 +95,7 @@ class TaskTimeTracker {
   async handleTaskStatusChange(data, tab) {
     const { taskId, newStatus, oldStatus, service, taskTitle, projectName, issueKey, spaceId } = data;
     const timerKey = this.getTaskKey(service, taskId, issueKey, spaceId);
-    console.log(`[Background] Handling status change: ${taskId} (key: ${timerKey}) from "${oldStatus}" to "${newStatus}"`);
     
-    // アクティビティを更新
     this.lastActivity = Date.now();
     
     const settings = await this.getSettings();
@@ -107,11 +109,8 @@ class TaskTimeTracker {
     const isStartStatus = serviceSettings.start.includes(newStatus);
     const wasStartStatus = oldStatus && serviceSettings.start.includes(oldStatus);
 
-    console.log(`[Background] Status analysis: isStart=${isStartStatus}, wasStart=${wasStartStatus}, hasTimer=${this.activeTimers.has(timerKey)}`);
-
     if (isStartStatus && !this.activeTimers.has(timerKey)) {
-      // nowステータスになったら計測開始
-      console.log(`[Background] Starting timer for ${timerKey}`);
+      console.log(`[Background] Timer started: ${issueKey}`);
       await this.startTimer(timerKey, {
         service,
         taskTitle,
@@ -123,14 +122,25 @@ class TaskTimeTracker {
         tabId: tab?.id
       });
     } else if (wasStartStatus && !isStartStatus && this.activeTimers.has(timerKey)) {
-      // nowから他のステータスに変わったら計測終了
-      console.log(`[Background] Stopping timer for ${timerKey}`);
+      console.log(`[Background] Timer stopped: ${issueKey}`);
       await this.stopTimer(timerKey);
-    } else if (isStartStatus && this.activeTimers.has(timerKey)) {
-      console.log(`[Background] Timer already running for ${timerKey}`);
     }
 
     this.updateBadge();
+  }
+
+  async handleTaskInitialized(data) {
+    const { taskId, status, service, taskTitle, issueKey, spaceId } = data;
+    const timerKey = this.getTaskKey(service, taskId, issueKey, spaceId);
+    
+    if (this.activeTimers.has(timerKey)) {
+      const settings = await this.getSettings();
+      const serviceSettings = settings.trackingStatuses[service];
+      if (serviceSettings && !serviceSettings.start.includes(status)) {
+        console.log(`[Background] Stopping orphaned timer: ${issueKey} (${status})`);
+        await this.stopTimer(timerKey);
+      }
+    }
   }
 
   async startTimer(timerKey, timerData) {
