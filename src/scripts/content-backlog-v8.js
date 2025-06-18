@@ -2,20 +2,14 @@ class BacklogTaskTrackerV8 {
   constructor() {
     this.taskStates = new Map();
     this.detectionMethods = {
-      network: true,
-      sortable: true,
       mutation: true,
       pointer: true
     };
     this.detectionStats = {
-      network: 0,
-      sortable: 0,
       mutation: 0,
       pointer: 0
     };
 
-    this.setupNetworkMonitoring();
-    this.setupSortableMonitoring();
     this.setupMutationObserver();
     this.setupPointerMonitoring();
     this.initializeTaskStates();
@@ -23,329 +17,7 @@ class BacklogTaskTrackerV8 {
 
 
   // ==========================================
-  // 1. ネットワーク監視 (最も確実な方法)
-  // ==========================================
-  
-  setupNetworkMonitoring() {
-    
-    // XMLHttpRequestの監視
-    this.interceptXHR();
-    
-    // fetchの監視
-    this.interceptFetch();
-    
-    // Backlog特有のAJAXエンドポイント監視
-    this.monitorBacklogAPI();
-  }
-
-  interceptXHR() {
-    const originalOpen = XMLHttpRequest.prototype.open;
-    const originalSend = XMLHttpRequest.prototype.send;
-    
-    XMLHttpRequest.prototype.open = function(method, url, ...args) {
-      this._method = method;
-      this._url = url;
-      return originalOpen.apply(this, [method, url, ...args]);
-    };
-    
-    XMLHttpRequest.prototype.send = function(data) {
-      const xhr = this;
-      
-      // レスポンス監視
-      const originalOnReadyStateChange = xhr.onreadystatechange;
-      xhr.onreadystatechange = function() {
-        if (xhr.readyState === 4 && xhr.status === 200) {
-          window.backlogTrackerV8?.handleNetworkResponse(xhr._method, xhr._url, xhr.responseText, data);
-        }
-        if (originalOnReadyStateChange) {
-          return originalOnReadyStateChange.apply(this, arguments);
-        }
-      };
-      
-      return originalSend.apply(this, [data]);
-    };
-  }
-
-  interceptFetch() {
-    const originalFetch = window.fetch;
-    
-    window.fetch = async function(resource, options = {}) {
-      const response = await originalFetch(resource, options);
-      
-      // レスポンスクローンして監視
-      const clonedResponse = response.clone();
-      try {
-        const responseText = await clonedResponse.text();
-        const url = typeof resource === 'string' ? resource : resource.url;
-        const method = options.method || 'GET';
-        
-        window.backlogTrackerV8?.handleNetworkResponse(method, url, responseText, options.body);
-      } catch (error) {
-        // レスポンス読み取りエラーは無視
-      }
-      
-      return response;
-    };
-  }
-
-  monitorBacklogAPI() {
-    // Backlog APIパターンの監視
-    this.apiPatterns = [
-      /\/api\/v2\/issues\/[^\/]+$/, // 課題更新API
-      /\/UpdateIssue\.action/, // 従来の課題更新
-      /\/api\/v2\/issues\/[^\/]+\/status/, // ステータス変更
-      /issues\/\d+/, // 課題関連API
-      /kanban/, // カンバン関連
-      /board/ // ボード関連
-    ];
-  }
-
-  handleNetworkResponse(method, url, responseText, requestData) {
-    if (!this.isBacklogAPICall(url)) return;
-    
-    this.detectionStats.network++;
-    
-    try {
-      // JSON レスポンス解析
-      const response = JSON.parse(responseText);
-      
-      // ステータス変更の検出
-      if (this.isStatusChangeResponse(response, url)) {
-        this.handleStatusChangeFromNetwork(response, requestData);
-      }
-      
-    } catch (error) {
-      // HTML レスポンスなど、非JSON の場合
-      this.parseHtmlResponse(responseText, url, requestData);
-    }
-  }
-
-  isBacklogAPICall(url) {
-    return this.apiPatterns.some(pattern => pattern.test(url)) ||
-           url.includes('/api/v2/issues/') ||
-           url.includes('UpdateIssue.action') ||
-           url.includes('kanban') ||
-           url.includes('board');
-  }
-
-  isStatusChangeResponse(response, url) {
-    // API v2 の場合
-    if (response.status && (response.id || response.issueKey)) {
-      return true;
-    }
-    
-    // 従来のAPI の場合
-    if (response.issue && response.issue.status) {
-      return true;
-    }
-    
-    // カンバンAPI の場合
-    if (url.includes('kanban') && response.issues) {
-      return true;
-    }
-    
-    return false;
-  }
-
-  handleStatusChangeFromNetwork(response, requestData) {
-    let issue, newStatus, oldStatus;
-    
-    // API v2 レスポンス
-    if (response.status && (response.id || response.issueKey)) {
-      issue = response;
-      newStatus = response.status.name;
-    }
-    // 従来のAPI レスポンス
-    else if (response.issue) {
-      issue = response.issue;
-      newStatus = response.issue.status.name;
-    }
-    // カンバンAPI
-    else if (response.issues && Array.isArray(response.issues)) {
-      response.issues.forEach(issueData => {
-        this.handleSingleIssueFromNetwork(issueData);
-      });
-      return;
-    }
-    
-    if (issue && newStatus) {
-      this.handleSingleIssueFromNetwork(issue, newStatus);
-    }
-  }
-
-  handleSingleIssueFromNetwork(issue, newStatus = null) {
-    const taskId = `backlog-${issue.issueKey || issue.id}`;
-    const currentStatus = newStatus || issue.status?.name;
-    const oldStatus = this.taskStates.get(taskId);
-    
-    if (oldStatus && oldStatus !== currentStatus) {
-      
-      this.notifyStatusChange({
-        taskId: taskId,
-        oldStatus: oldStatus,
-        newStatus: currentStatus,
-        taskTitle: issue.summary || issue.title || 'Unknown Task',
-        issueKey: issue.issueKey || issue.id,
-        spaceId: this.getSpaceId(),
-        detectionMethod: 'network'
-      });
-    }
-    
-    this.taskStates.set(taskId, currentStatus);
-  }
-
-  parseHtmlResponse(html, url, requestData) {
-    // HTML レスポンスからステータス変更情報を抽出
-    if (url.includes('UpdateIssue.action')) {
-      this.parseUpdateIssueResponse(html, requestData);
-    }
-  }
-
-  parseUpdateIssueResponse(html, requestData) {
-    // フォームデータからissueKey とステータス情報を抽出
-    try {
-      if (requestData && typeof requestData === 'string') {
-        const params = new URLSearchParams(requestData);
-        const issueKey = params.get('issueKey') || params.get('issue.key');
-        const statusId = params.get('issue.status.id') || params.get('statusId');
-        
-        if (issueKey && statusId) {
-          // ステータスID からステータス名を取得
-          const statusName = this.getStatusNameById(statusId);
-          if (statusName) {
-            const taskId = `backlog-${issueKey}`;
-            const oldStatus = this.taskStates.get(taskId);
-            
-            if (oldStatus && oldStatus !== statusName) {
-              
-              this.notifyStatusChange({
-                taskId: taskId,
-                oldStatus: oldStatus,
-                newStatus: statusName,
-                taskTitle: this.getTaskTitleByKey(issueKey),
-                issueKey: issueKey,
-                spaceId: this.getSpaceId(),
-                detectionMethod: 'network'
-              });
-            }
-            
-            this.taskStates.set(taskId, statusName);
-          }
-        }
-      }
-    } catch (error) {
-    }
-  }
-
-  // ==========================================
-  // 2. jQuery UI Sortable 監視
-  // ==========================================
-  
-  setupSortableMonitoring() {
-    
-    // jQuery が読み込まれるまで待機
-    this.waitForjQuery(() => {
-      this.monitorSortableEvents();
-    });
-  }
-
-  waitForjQuery(callback, maxAttempts = 50) {
-    if (window.jQuery && window.jQuery.ui) {
-      callback();
-    } else if (maxAttempts > 0) {
-      setTimeout(() => {
-        this.waitForjQuery(callback, maxAttempts - 1);
-      }, 100);
-    } else {
-    }
-  }
-
-  monitorSortableEvents() {
-    const $ = window.jQuery;
-    
-    // sortable の stop イベントを監視
-    $(document).on('sortstop', this.handleSortableStop.bind(this));
-    $(document).on('sortupdate', this.handleSortableUpdate.bind(this));
-    
-    // 動的に作成される sortable の監視
-    const originalSortable = $.fn.sortable;
-    $.fn.sortable = function(options, ...args) {
-      if (typeof options === 'object' && options !== null) {
-        const originalStop = options.stop;
-        const originalUpdate = options.update;
-        
-        options.stop = function(event, ui) {
-          window.backlogTrackerV8?.handleSortableStopDirect(event, ui);
-          if (originalStop) {
-            return originalStop.apply(this, arguments);
-          }
-        };
-        
-        options.update = function(event, ui) {
-          window.backlogTrackerV8?.handleSortableUpdateDirect(event, ui);
-          if (originalUpdate) {
-            return originalUpdate.apply(this, arguments);
-          }
-        };
-      }
-      
-      return originalSortable.apply(this, [options, ...args]);
-    };
-    
-  }
-
-  handleSortableStop(event, ui) {
-    this.detectionStats.sortable++;
-    this.processSortableChange(event, ui);
-  }
-
-  handleSortableUpdate(event, ui) {
-    this.detectionStats.sortable++;
-    this.processSortableChange(event, ui);
-  }
-
-  handleSortableStopDirect(event, ui) {
-    this.detectionStats.sortable++;
-    this.processSortableChange(event, ui);
-  }
-
-  handleSortableUpdateDirect(event, ui) {
-    this.detectionStats.sortable++;
-    this.processSortableChange(event, ui);
-  }
-
-  processSortableChange(event, ui) {
-    if (!ui || !ui.item) return;
-    
-    const item = ui.item[0] || ui.item;
-    const task = this.extractTaskFromElement(item);
-    
-    if (task) {
-      const oldStatus = this.taskStates.get(task.id);
-      
-      // 新しいステータスを判定
-      setTimeout(() => {
-        const newTask = this.extractTaskFromElement(item);
-        if (newTask && newTask.status !== oldStatus) {
-          
-          this.notifyStatusChange({
-            taskId: task.id,
-            oldStatus: oldStatus,
-            newStatus: newTask.status,
-            taskTitle: task.title,
-            issueKey: task.issueKey,
-            spaceId: task.spaceId,
-            detectionMethod: 'sortable'
-          });
-          
-          this.taskStates.set(task.id, newTask.status);
-        }
-      }, 100);
-    }
-  }
-
-  // ==========================================
-  // 3. 改良された DOM 監視
+  // 1. DOM Mutation 監視
   // ==========================================
   
   setupMutationObserver() {
@@ -567,7 +239,7 @@ class BacklogTaskTrackerV8 {
   }
 
   // ==========================================
-  // 4. ポインター監視 (フォールバック)
+  // 2. ポインター監視
   // ==========================================
   
   setupPointerMonitoring() {
@@ -1089,7 +761,7 @@ class BacklogTaskTrackerV8 {
   }
 
   notifyStatusChange(changeInfo) {
-    console.log(`[Backlog] ${changeInfo.issueKey}: ${changeInfo.oldStatus} → ${changeInfo.newStatus}`);
+    console.log(`[Backlog] ${changeInfo.issueKey}: ${changeInfo.oldStatus} → ${changeInfo.newStatus} (${changeInfo.detectionMethod})`);
     
     try {
       chrome.runtime.sendMessage({
