@@ -3,6 +3,19 @@ class GitHubTaskTrackerV3 {
     this.currentTaskId = null;
     this.currentStatus = null;
     this.draggedCardInfo = null;
+    this.lastKnownStatus = new Map();
+    
+    // Backlog方式の検知システム
+    this.detectionStats = {
+      mutation: 0,
+      pointer: 0
+    };
+
+    // 即座検知とデバウンス用の状態管理
+    this.immediateMode = false;
+    this.pendingChanges = new Map(); // taskId -> {timestamp, changeInfo}
+    this.changeTimestamps = new Map(); // taskId -> timestamp
+    this.debounceDelay = 100; // 100ms内の重複変更を防ぐ
     
     // GitHub SPA のネットワークリクエストを監視
     this.originalFetch = window.fetch;
@@ -21,11 +34,8 @@ class GitHubTaskTrackerV3 {
   setupBannerNotification() {
     // DOM readyを保証してからバナー通知システムを初期化
     this.ensureDOMReady().then(() => {
-      console.log('[GitHubTracker] DOM ready confirmed, initializing banner notification');
       if (!window.taskTrackerBanner) {
         this.initializeBannerNotification();
-      } else {
-        console.log('[GitHubTracker] Banner notification already initialized');
       }
     });
   }
@@ -55,8 +65,6 @@ class GitHubTaskTrackerV3 {
 
       setupStyles() {
         if (document.getElementById('task-tracker-banner-styles')) return;
-
-        console.log('[GitHubTracker] Setting up banner styles');
         
         // CSPに配慮してlinkタグでCSSファイルを読み込む
         const linkElement = document.createElement('link');
@@ -66,11 +74,8 @@ class GitHubTaskTrackerV3 {
         linkElement.href = chrome.runtime.getURL('src/styles/banner-notification.css');
         document.head.appendChild(linkElement);
         
-        console.log('[GitHubTracker] Banner styles loaded from external CSS');
-        
         // フォールバック: CSSファイルが読み込めない場合はインラインで設定
         linkElement.onerror = () => {
-          console.log('[GitHubTracker] External CSS failed, falling back to inline styles');
           this.setupInlineStyles();
         };
       }
@@ -93,38 +98,38 @@ class GitHubTaskTrackerV3 {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             font-size: 14px;
             line-height: 1.4;
-            transform: translateX(100%);
-            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
             backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
             border: 1px solid rgba(255, 255, 255, 0.1);
+            overflow: hidden;
           }
 
           .task-tracker-banner.show {
-            transform: translateX(0);
+            opacity: 1;
+            transform: translateY(0);
           }
 
           .task-tracker-banner.hide {
-            transform: translateX(100%);
+            opacity: 0;
+            transform: translateY(-20px);
           }
 
           .task-tracker-banner-header {
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            padding: 16px 20px 12px 20px;
+            align-items: center;
+            padding: 12px 16px 8px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-          }
-
-          .task-tracker-banner-icon {
-            font-size: 20px;
-            margin-right: 8px;
+            background: rgba(255, 255, 255, 0.05);
           }
 
           .task-tracker-banner-title {
-            display: flex;
-            align-items: center;
             font-weight: 600;
             font-size: 15px;
+            margin: 0;
           }
 
           .task-tracker-banner-close {
@@ -132,14 +137,15 @@ class GitHubTaskTrackerV3 {
             border: none;
             color: rgba(255, 255, 255, 0.8);
             cursor: pointer;
-            font-size: 18px;
+            padding: 4px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+            font-size: 14px;
             width: 24px;
             height: 24px;
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: 50%;
-            transition: all 0.2s;
           }
 
           .task-tracker-banner-close:hover {
@@ -194,103 +200,82 @@ class GitHubTaskTrackerV3 {
             to { width: 0%; }
           }
 
-          .task-tracker-banner:hover .task-tracker-banner-progress {
-            animation-play-state: paused;
+          @keyframes bannerSlideIn {
+            from {
+              opacity: 0;
+              transform: translateY(-20px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
           }
 
-          @media (max-width: 768px) {
-            .task-tracker-banner {
-              top: 10px;
-              right: 10px;
-              left: 10px;
-              min-width: auto;
-              max-width: none;
+          @keyframes bannerSlideOut {
+            from {
+              opacity: 1;
+              transform: translateY(0);
+            }
+            to {
+              opacity: 0;
+              transform: translateY(-20px);
             }
           }
         `;
-
-        const styleSheet = document.createElement('style');
-        styleSheet.id = 'task-tracker-banner-inline-styles';
-        styleSheet.textContent = styles;
-        document.head.appendChild(styleSheet);
+        
+        const styleElement = document.createElement('style');
+        styleElement.id = 'task-tracker-banner-inline-styles';
+        styleElement.textContent = styles;
+        document.head.appendChild(styleElement);
       }
 
-      show(options) {
-        const { type, title, taskTitle, duration, projectName } = options;
-        
-        if (this.currentBanner) {
-          this.hide(true);
-        }
-
-        this.bannerQueue.push({ type, title, taskTitle, duration, projectName });
-        
-        if (!this.isShowing) {
-          this.showNext();
-        }
-      }
-
-      showNext() {
-        if (this.bannerQueue.length === 0) {
-          this.isShowing = false;
+      show(data) {
+        if (this.isShowing && this.currentBanner) {
+          this.bannerQueue.push(data);
           return;
         }
 
         this.isShowing = true;
-        const options = this.bannerQueue.shift();
-        this.createBanner(options);
-      }
-
-      createBanner({ type, title, taskTitle, duration, projectName }) {
-        this.removeBanner();
+        const { type, taskTitle, duration, projectName } = data;
 
         const banner = document.createElement('div');
         banner.className = `task-tracker-banner ${type}`;
-        
-        const icon = type === 'start' ? '⏰' : '✅';
-        const titleText = title || (type === 'start' ? 'タスク計測開始' : 'タスク計測終了');
-        
-        let contentHTML = `
-          <div class="task-tracker-banner-header">
-            <div class="task-tracker-banner-title">
-              <span class="task-tracker-banner-icon">${icon}</span>
-              ${titleText}
+
+        let title, content;
+        if (type === 'start') {
+          title = 'タスク計測開始';
+          content = `
+            <div class="task-tracker-banner-task-title">${taskTitle}</div>
+            <div class="task-tracker-banner-details">${projectName ? `プロジェクト: ${projectName}` : ''}</div>
+          `;
+        } else {
+          title = 'タスク計測終了';
+          const durationText = duration ? this.formatDuration(duration) : '';
+          content = `
+            <div class="task-tracker-banner-task-title">${taskTitle}</div>
+            <div class="task-tracker-banner-details">
+              ${projectName ? `プロジェクト: ${projectName}` : ''}
+              ${durationText ? `<div class="task-tracker-banner-duration">作業時間: ${durationText}</div>` : ''}
             </div>
-            <button class="task-tracker-banner-close">×</button>
+          `;
+        }
+
+        banner.innerHTML = `
+          <div class="task-tracker-banner-header">
+            <h4 class="task-tracker-banner-title">${title}</h4>
+            <button class="task-tracker-banner-close" aria-label="Close">×</button>
           </div>
           <div class="task-tracker-banner-content">
-            <div class="task-tracker-banner-task-title">${taskTitle || 'Unknown Task'}</div>
-            <div class="task-tracker-banner-details">
-        `;
-
-        if (projectName) {
-          contentHTML += `プロジェクト: ${projectName}<br>`;
-        }
-
-        if (type === 'start') {
-          contentHTML += '時間計測を開始しました';
-        } else if (type === 'stop' && duration) {
-          contentHTML += `作業時間: <span class="task-tracker-banner-duration">${this.formatDuration(duration)}</span>`;
-        } else {
-          contentHTML += '時間計測を終了しました';
-        }
-
-        contentHTML += `
-            </div>
+            ${content}
           </div>
           <div class="task-tracker-banner-progress"></div>
         `;
 
-        banner.innerHTML = contentHTML;
-        
         banner.querySelector('.task-tracker-banner-close').addEventListener('click', () => {
-          this.hide();
+          this.hide(true);
         });
 
-        banner.addEventListener('click', () => {
-          this.hide();
-        });
-
-        let hideTimeout;
+        let hideTimeout = null;
         banner.addEventListener('mouseenter', () => {
           if (hideTimeout) {
             clearTimeout(hideTimeout);
@@ -393,6 +378,14 @@ class GitHubTaskTrackerV3 {
           });
         }
       }
+
+      showNext() {
+        this.isShowing = false;
+        if (this.bannerQueue.length > 0) {
+          const nextData = this.bannerQueue.shift();
+          this.show(nextData);
+        }
+      }
     }
 
     window.taskTrackerBanner = new BannerNotification();
@@ -401,465 +394,672 @@ class GitHubTaskTrackerV3 {
   setupBackgroundMessageListener() {
     // バナー通知専用のメッセージリスナーを追加
     if (!window.githubBannerListenerAdded) {
-      console.log('[GitHubTracker] Setting up background message listener');
       chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        console.log('[GitHubTracker] Message received:', message.type, message);
         if (message.type === 'SHOW_BANNER_NOTIFICATION') {
-          console.log('[GitHubTracker] Processing banner notification:', message.data);
-          console.log('[GitHubTracker] Banner object exists:', !!window.taskTrackerBanner);
           this.handleBannerNotification(message.data);
           sendResponse({ success: true });
           return true; // 非同期レスポンスを示す
-        } else {
-          console.log('[GitHubTracker] Ignoring message type:', message.type);
         }
       });
       window.githubBannerListenerAdded = true;
-      console.log('[GitHubTracker] Background message listener setup complete');
-    } else {
-      console.log('[GitHubTracker] Background message listener already exists');
     }
   }
 
   async handleBannerNotification(data) {
-    console.log('[GitHubTracker] handleBannerNotification called with:', data);
     const { type, taskTitle, duration, projectName } = data;
     
     if (window.taskTrackerBanner) {
-      console.log('[GitHubTracker] Banner object available, showing notification');
       try {
         if (type === 'start') {
-          console.log('[GitHubTracker] Showing start notification');
           await window.taskTrackerBanner.showTaskStart(taskTitle, projectName);
         } else if (type === 'stop') {
-          console.log('[GitHubTracker] Showing stop notification');
           await window.taskTrackerBanner.showTaskStop(taskTitle, duration, projectName);
-        } else {
-          console.log('[GitHubTracker] Unknown notification type:', type);
         }
-        console.log('[GitHubTracker] Banner notification processed successfully');
       } catch (error) {
         console.error('[GitHubTracker] Error showing banner notification:', error);
       }
     } else {
-      console.error('[GitHubTracker] Banner object not available, cannot show notification');
-      console.log('[GitHubTracker] Attempting to initialize banner now...');
       this.initializeBannerNotification();
       // Retry after initialization
       setTimeout(() => {
         if (window.taskTrackerBanner) {
-          console.log('[GitHubTracker] Retrying banner notification after delayed initialization');
           this.handleBannerNotification(data);
-        } else {
-          console.error('[GitHubTracker] Banner initialization failed completely');
         }
       }, 100);
     }
   }
 
   init() {
-    console.log('[GitHub Tracker V3] Initializing network-based tracking');
+    console.log('[GitHub] Initializing GitHub Projects tracker');
+    this.setupMutationObserver();
+    this.setupPointerMonitoring();
     
-    // 1. Network interception (最も効率的)
-    this.interceptNetworkRequests();
-    
-    // 2. History API monitoring
-    this.interceptHistoryChanges();
-    
-    // 3. Event delegation (最小限のDOM監視)
-    this.setupEventDelegation();
-    
-    // 4. Storage events (他のタブとの同期)
-    this.setupStorageSync();
-    
-    console.log('[GitHub Tracker V3] Initialization complete');
+    // DOM要素の存在を確認してから状態初期化
+    this.waitForBoardElements().then(() => {
+      this.initializeTaskStates();
+    });
   }
 
-  // GitHub Projects V2 の GraphQL API を監視
-  interceptNetworkRequests() {
-    console.log('[GitHub Tracker V3] Setting up network interception');
-    
-    // Fetch API の監視
-    window.fetch = async (...args) => {
-      const response = await this.originalFetch.apply(window, args);
-      this.analyzeNetworkRequest(args[0], args[1], response.clone());
-      return response;
-    };
-
-    // XMLHttpRequest の監視
-    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-      this._url = url;
-      this._method = method;
-      
-      this.addEventListener('load', () => {
-        window.gitHubTracker.analyzeXHRResponse(this);
-      });
-      
-      return window.gitHubTracker.originalXHROpen.apply(this, [method, url, ...rest]);
-    };
-    
-    window.gitHubTracker = this;
-  }
-
-  async analyzeNetworkRequest(url, options, response) {
-    try {
-      // GitHub Projects V2 GraphQL API のリクエストを検出
-      if (typeof url === 'string' && url.includes('/graphql') && options?.body) {
-        const requestBody = options.body;
+  async waitForBoardElements() {
+    // GitHub Projects の動的コンテンツロードを待つ
+    return new Promise((resolve) => {
+      const checkBoardElements = () => {
+        const hasColumns = document.querySelector('[data-board-column]') !== null;
+        const hasCards = document.querySelector('[data-board-card-id]') !== null;
         
-        // ProjectV2 の mutation を検出
-        if (requestBody.includes('updateProjectV2ItemFieldValue') || 
-            requestBody.includes('moveProjectV2Item')) {
-          
-          console.log('[GitHub Tracker V3] ProjectV2 mutation detected');
-          
-          // レスポンスを解析してタスク移動を検出
-          const responseData = await response.json();
-          this.processGraphQLResponse(responseData);
+        if (hasColumns) {
+          console.log('[GitHub] GitHub Projects board elements detected');
+          resolve();
+        } else {
+          // 最大5秒待機
+          setTimeout(checkBoardElements, 500);
+        }
+      };
+      
+      // 初回チェック
+      if (document.readyState === 'complete') {
+        setTimeout(checkBoardElements, 100);
+      } else {
+        document.addEventListener('DOMContentLoaded', () => {
+          setTimeout(checkBoardElements, 100);
+        });
+      }
+    });
+  }
+
+  // ==========================================
+  // Mutation Observer監視（Backlog方式）
+  // ==========================================
+  
+  setupMutationObserver() {
+    console.log('[GitHub] Setting up MutationObserver');
+    
+    this.observer = new MutationObserver((mutations) => {
+      this.processMutationsInBatch(mutations);
+    });
+    
+    // document.bodyが存在するまで待機
+    const startObserver = () => {
+      if (document.body) {
+        console.log('[GitHub] Starting MutationObserver on document.body');
+        this.observer.observe(document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['data-board-column', 'class']
+        });
+      } else {
+        console.log('[GitHub] document.body not ready, retrying...');
+        setTimeout(startObserver, 100);
+      }
+    };
+    
+    startObserver();
+  }
+
+  shouldProcessMutation(mutation) {
+    const target = mutation.target;
+    
+    // data-board-column属性の変更（GitHub特有）
+    if (mutation.type === 'attributes' && mutation.attributeName === 'data-board-column') {
+      console.log('[GitHub] Board column attribute change detected:', target);
+      return true;
+    }
+    
+    // class属性の変更
+    if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+      if (this.isGitHubCardElement(target) || this.isGitHubColumnElement(target)) {
+        console.log('[GitHub] Class change on card/column element:', target);
+        return true;
+      }
+    }
+    
+    // 子要素の追加・削除（カードの移動や新規作成）
+    if (mutation.type === 'childList') {
+      // 列コンテナレベルでの変更を優先監視
+      if (this.isGitHubColumnElement(target)) {
+        console.log('[GitHub] Column-level childList change detected:', target);
+        return true;
+      }
+      
+      // 追加された要素をチェック
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType === 1 && this.isGitHubCardElement(node)) {
+          console.log('[GitHub] Card added to DOM:', node);
+          return true;
         }
       }
-    } catch (error) {
-      // Silent fail - レスポンスが既に消費されている場合など
-    }
-  }
-
-  analyzeXHRResponse(xhr) {
-    if (xhr._url && xhr._url.includes('/graphql') && xhr.responseText) {
-      try {
-        const response = JSON.parse(xhr.responseText);
-        this.processGraphQLResponse(response);
-      } catch (error) {
-        // Silent fail
-      }
-    }
-  }
-
-  processGraphQLResponse(responseData) {
-    console.log('[GitHub Tracker V3] Processing GraphQL response:', responseData);
-    
-    // GraphQL レスポンスからタスク情報を抽出
-    if (responseData.data) {
-      // updateProjectV2ItemFieldValue の場合
-      if (responseData.data.updateProjectV2ItemFieldValue) {
-        const item = responseData.data.updateProjectV2ItemFieldValue.projectV2Item;
-        this.handleItemUpdate(item);
-      }
       
-      // moveProjectV2Item の場合
-      if (responseData.data.moveProjectV2Item) {
-        const item = responseData.data.moveProjectV2Item.projectV2Item;
-        this.handleItemUpdate(item);
-      }
-    }
-  }
-
-  handleItemUpdate(item) {
-    if (!item) return;
-    
-    console.log('[GitHub Tracker V3] Item update detected:', item);
-    
-    // GraphQL データからタスク情報を構築
-    const taskInfo = this.extractTaskInfoFromGraphQL(item);
-    if (taskInfo) {
-      console.log('[GitHub Tracker V3] Task status change via GraphQL:', taskInfo);
-      this.sendStatusChange(taskInfo);
-    }
-  }
-
-  extractTaskInfoFromGraphQL(item) {
-    try {
-      // GraphQL レスポンスの構造に基づいてデータを抽出
-      const content = item.content;
-      const fieldValues = item.fieldValues?.nodes || [];
-      
-      let status = null;
-      let title = null;
-      let taskId = null;
-      
-      // ステータスフィールドを探す
-      for (const field of fieldValues) {
-        if (field.__typename === 'ProjectV2ItemFieldSingleSelectValue') {
-          status = field.name || field.optionId;
+      // 削除された要素をチェック
+      for (const node of mutation.removedNodes) {
+        if (node.nodeType === 1 && this.isGitHubCardElement(node)) {
+          console.log('[GitHub] Card removed from DOM:', node);
+          return true;
         }
       }
       
-      // コンテンツ情報を抽出
-      if (content) {
-        title = content.title || content.name;
-        if (content.number) {
-          taskId = `github-issue-${content.number}`;
-        }
+      // GitHub Projects関連コンテナ内での変更
+      if (this.isGitHubBoardElement(target)) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+
+  isGitHubCardElement(element) {
+    if (!element || element.nodeType !== 1) return false;
+    
+    // data-board-card-id属性を持つ要素（GitHub Projects特有）
+    if (element.hasAttribute('data-board-card-id')) {
+      return true;
+    }
+    
+    // GitHub Projectsのカードクラス
+    const className = element.className || '';
+    if (typeof className === 'string') {
+      if (className.includes('board-view-column-card') ||
+          className.includes('index-module__CardBaseWithSash') ||
+          className.includes('card-base__CardBase')) {
+        return true;
+      }
+    }
+    
+    // Issueリンクを持つ要素での判定
+    if (element.querySelector('a[href*="/issues/"]') ||
+        element.querySelector('a[href*="/pull/"]')) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  isGitHubColumnElement(element) {
+    if (!element || element.nodeType !== 1) return false;
+    
+    // data-board-column属性を持つ要素（列のコンテナ）
+    if (element.hasAttribute('data-board-column')) {
+      return true;
+    }
+    
+    // DnD関連の属性（ドロップ可能な領域）
+    if (element.hasAttribute('data-dnd-drop-type')) {
+      return true;
+    }
+    
+    // 列コンテナのクラス名での判定
+    const className = element.className || '';
+    if (typeof className === 'string') {
+      if (className.includes('column-frame-module') ||
+          className.includes('column-drop-zone') ||
+          (className.includes('Box') && className.includes('column'))) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+
+  isGitHubBoardElement(element) {
+    const className = element.className || '';
+    if (typeof className === 'string') {
+      // GitHub Projects関連クラス
+      if (className.includes('board') ||
+          className.includes('column') ||
+          className.includes('card') ||
+          className.includes('project')) {
+        return true;
+      }
+    }
+    
+    // data属性での判定
+    if (element.hasAttribute('data-board-column') ||
+        element.hasAttribute('data-board-card-id') ||
+        element.hasAttribute('data-dnd-drop-type') ||
+        element.hasAttribute('data-dnd-drag-type')) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  processMutationsInBatch(mutations) {
+    if (this.immediateMode) {
+      // 即座検知モード: バッチ処理をスキップして即座に処理
+      console.log('[GitHub] Immediate mode: processing mutations instantly');
+      this.processImmediateMutations(mutations);
+    } else {
+      // 通常モード: リクエストアニメーションフレームで効率的に処理
+      requestAnimationFrame(() => {
+        this.processNormalMutations(mutations);
+      });
+    }
+  }
+
+  processImmediateMutations(mutations) {
+    const processedElements = new Set();
+    const processedColumns = new Set();
+    
+    mutations.forEach(mutation => {
+      if (!this.shouldProcessMutation(mutation)) return;
+      
+      const element = mutation.target;
+      
+      // 列コンテナの変更の場合、その列内の全タスクをチェック
+      if (this.isGitHubColumnElement(element) && !processedColumns.has(element)) {
+        processedColumns.add(element);
+        console.log('[GitHub] Scanning all tasks in column due to childList change');
+        this.scanAllTasksInColumn(element, 'column-immediate');
+      }
+      // 通常のタスク要素の変更
+      else if (!processedElements.has(element)) {
+        processedElements.add(element);
+        this.checkElementStatusChangeWithDebounce(element, 'immediate');
+      }
+    });
+  }
+
+  processNormalMutations(mutations) {
+    const processedElements = new Set();
+    const processedColumns = new Set();
+    
+    mutations.forEach(mutation => {
+      if (!this.shouldProcessMutation(mutation)) return;
+      
+      const element = mutation.target;
+      
+      // 列コンテナの変更の場合、その列内の全タスクをチェック
+      if (this.isGitHubColumnElement(element) && !processedColumns.has(element)) {
+        processedColumns.add(element);
+        console.log('[GitHub] Scanning all tasks in column due to childList change (batch)');
+        this.scanAllTasksInColumn(element, 'column-batch');
+      }
+      // 通常のタスク要素の変更
+      else if (!processedElements.has(element)) {
+        processedElements.add(element);
+        this.checkElementStatusChangeWithDebounce(element, 'batch');
+      }
+    });
+  }
+
+  scanAllTasksInColumn(columnElement, detectionSource) {
+    // 列内の全タスクカード要素を取得
+    const taskElements = columnElement.querySelectorAll('[data-board-card-id], [class*="card"], [class*="CardBase"]');
+    
+    console.log(`[GitHub] Found ${taskElements.length} task elements in column for ${detectionSource} scan`);
+    
+    taskElements.forEach(taskElement => {
+      if (this.isGitHubCardElement(taskElement)) {
+        this.checkElementStatusChangeWithDebounce(taskElement, detectionSource);
+      }
+    });
+    
+    // 列内にタスクがない場合でも、削除されたタスクがないかチェック
+    if (taskElements.length === 0) {
+      console.log('[GitHub] Empty column detected, checking for removed tasks');
+      this.checkForRemovedTasks(columnElement);
+    }
+  }
+
+  checkForRemovedTasks(columnElement) {
+    // 現在のタスク状態と実際のDOM要素を比較し、削除されたタスクを検出
+    const currentTaskIds = new Set();
+    const allCurrentTasks = document.querySelectorAll('[data-board-card-id], [class*="card"], [class*="CardBase"]');
+    
+    allCurrentTasks.forEach(taskElement => {
+      const task = this.extractTaskFromElement(taskElement);
+      if (task) {
+        currentTaskIds.add(task.id);
+      }
+    });
+    
+    // 記録されているタスクIDのうち、現在DOM上に存在しないものを検出
+    const removedTasks = [];
+    for (const [taskId, status] of this.lastKnownStatus.entries()) {
+      if (!currentTaskIds.has(taskId)) {
+        removedTasks.push({ taskId, status });
+      }
+    }
+    
+    if (removedTasks.length > 0) {
+      console.log('[GitHub] Detected removed tasks:', removedTasks);
+      // 削除されたタスクの状態をクリア
+      removedTasks.forEach(({ taskId }) => {
+        this.lastKnownStatus.delete(taskId);
+        this.changeTimestamps.delete(taskId);
+      });
+    }
+  }
+
+  checkElementStatusChangeWithDebounce(element, detectionSource) {
+    // 対象要素とその関連要素をチェック
+    const elementsToCheck = this.getElementsToCheck(element);
+    
+    elementsToCheck.forEach(targetElement => {
+      const task = this.extractTaskFromElement(targetElement);
+      if (!task) return;
+      
+      const now = Date.now();
+      const lastChangeTime = this.changeTimestamps.get(task.id) || 0;
+      
+      // デバウンス: 短時間での重複変更をスキップ
+      if (now - lastChangeTime < this.debounceDelay) {
+        console.log(`[GitHub] Debounced duplicate change for ${task.issueKey} (${detectionSource})`);
+        return;
       }
       
-      if (title && status) {
-        return {
-          id: taskId || this.generateTaskId(title),
-          title: title,
-          status: status,
-          projectName: this.getProjectName()
+      const oldStatus = this.lastKnownStatus.get(task.id);
+      
+      if (oldStatus && oldStatus !== task.status) {
+        this.changeTimestamps.set(task.id, now);
+        
+        const changeInfo = {
+          taskId: task.id,
+          oldStatus: oldStatus,
+          newStatus: task.status,
+          taskTitle: task.title,
+          issueKey: task.issueKey,
+          detectionMethod: 'mutation',
+          detectionSource: detectionSource,
+          timestamp: now
         };
+        
+        console.log(`[GitHub] Status change detected (${detectionSource}):`, 
+                    `${task.issueKey}: ${oldStatus} → ${task.status} at ${new Date(now).toLocaleTimeString()}`);
+        
+        this.notifyStatusChange(changeInfo);
       }
-    } catch (error) {
-      console.error('[GitHub Tracker V3] Error extracting GraphQL data:', error);
-    }
-    
-    return null;
-  }
-
-  // History API の変更を監視（ページ遷移検出）
-  interceptHistoryChanges() {
-    const tracker = this;
-    
-    history.pushState = function(...args) {
-      tracker.originalPushState.apply(history, args);
-      tracker.handleUrlChange();
-    };
-    
-    history.replaceState = function(...args) {
-      tracker.originalReplaceState.apply(history, args);
-      tracker.handleUrlChange();
-    };
-    
-    window.addEventListener('popstate', () => {
-      this.handleUrlChange();
-    });
-  }
-
-  handleUrlChange() {
-    console.log('[GitHub Tracker V3] URL change detected:', window.location.href);
-    
-    // プロジェクトページの場合のみ処理
-    if (this.isProjectPage()) {
-      // 少し遅延してからページの解析を実行
-      setTimeout(() => {
-        this.detectCurrentTaskFromPage();
-      }, 500);
-    }
-  }
-
-  isProjectPage() {
-    return window.location.href.includes('/projects/');
-  }
-
-  // 最小限のイベント委譲（DOMポーリングなし）
-  setupEventDelegation() {
-    // ドラッグ&ドロップのイベントのみ監視
-    const events = ['dragstart', 'dragend', 'drop'];
-    
-    events.forEach(eventType => {
-      document.addEventListener(eventType, (e) => {
-        if (this.isCardElement(e.target)) {
-          this.handleCardEvent(eventType, e);
-        }
-      }, { capture: true, passive: true });
-    });
-  }
-
-  isCardElement(element) {
-    return element.closest('.card-internal-content-module__Box--g6fvU, .jeNErH, [draggable="true"]');
-  }
-
-  handleCardEvent(eventType, e) {
-    const cardElement = this.isCardElement(e.target);
-    if (!cardElement) {
-      console.log('[GitHub Tracker V3] Event target is not a card element:', eventType, e.target);
-      return;
-    }
-    
-    if (eventType === 'dragstart') {
-      this.draggedCardInfo = this.extractCardInfo(cardElement);
-      console.log('[GitHub Tracker V3] Drag started:', this.draggedCardInfo);
-    }
-    
-    if (eventType === 'dragend' || eventType === 'drop') {
-      if (this.draggedCardInfo) {
-        console.log('[GitHub Tracker V3] Drag ended, waiting for GraphQL response...');
-        // GraphQL レスポンスで処理されるので、ここでは待機のみ
-        setTimeout(() => {
-          if (this.draggedCardInfo) {
-            console.log('[GitHub Tracker V3] No GraphQL response received, falling back to DOM check');
-            this.fallbackDOMCheck();
-          }
-        }, 2000);
-      }
-    }
-  }
-
-  // フォールバック：GraphQLで検出できない場合のみ実行
-  fallbackDOMCheck() {
-    if (!this.draggedCardInfo) return;
-    
-    console.log('[GitHub Tracker V3] Performing fallback DOM check');
-    const { title, issue } = this.draggedCardInfo;
-    
-    // 最小限のDOM検索
-    const allCards = document.querySelectorAll('.card-internal-content-module__Box--g6fvU, .jeNErH');
-    
-    for (const card of allCards) {
-      const cardTitle = card.querySelector('.title-module__SanitizedHtml_1--dvKYp')?.textContent?.trim();
-      const cardIssue = card.querySelector('.header-module__Text--apTHb')?.textContent?.trim();
       
-      if ((cardTitle === title) || (cardIssue === issue)) {
-        const status = this.getCardStatus(card);
-        if (status) {
-          const taskInfo = {
-            id: this.generateTaskId(cardTitle, cardIssue),
-            title: cardTitle,
-            status: status,
-            issue: cardIssue,
-            projectName: this.getProjectName()
-          };
-          
-          console.log('[GitHub Tracker V3] Fallback detected status change:', taskInfo);
-          this.sendStatusChange(taskInfo);
-          break;
-        }
-      }
-    }
-    
-    this.draggedCardInfo = null;
-  }
-
-  getCardStatus(cardElement) {
-    let current = cardElement;
-    let depth = 0;
-    
-    while (current && depth < 10) {
-      const column = current.closest('[data-testid*="column"], [role="region"]');
-      if (column) {
-        const statusElement = column.querySelector('h2, h3, [data-testid*="column-name"]');
-        if (statusElement) {
-          return statusElement.textContent?.trim();
-        }
-      }
-      current = current.parentElement;
-      depth++;
-    }
-    
-    return null;
-  }
-
-  // 他のタブとの同期
-  setupStorageSync() {
-    window.addEventListener('storage', (e) => {
-      if (e.key === 'github-task-sync') {
-        const syncData = JSON.parse(e.newValue);
-        console.log('[GitHub Tracker V3] Sync data received:', syncData);
-        this.sendStatusChange(syncData);
-      }
+      this.lastKnownStatus.set(task.id, task.status);
     });
   }
 
-  // ページから現在のタスクを検出（URL変更時のみ）
-  detectCurrentTaskFromPage() {
-    // 現在表示されているカード（もしあれば）を検出
-    const focusedCard = document.querySelector('[aria-selected="true"], [data-focused="true"], .focused');
-    if (focusedCard) {
-      const cardInfo = this.extractCardInfo(focusedCard);
-      if (cardInfo) {
-        const status = this.getCardStatus(focusedCard);
-        if (status) {
-          cardInfo.status = status;
-          console.log('[GitHub Tracker V3] Current task detected from page:', cardInfo);
-          this.currentTaskId = cardInfo.id;
-          this.currentStatus = cardInfo.status;
-        }
+  getElementsToCheck(element) {
+    const elementsToCheck = [element];
+    
+    // 親要素もチェック（最大3レベル上まで）
+    let parent = element.parentElement;
+    for (let i = 0; i < 3 && parent; i++) {
+      if (this.isGitHubCardElement(parent) || this.isGitHubBoardElement(parent)) {
+        elementsToCheck.push(parent);
       }
+      parent = parent.parentElement;
     }
-  }
-
-  sendStatusChange(taskInfo) {
-    const changeData = {
-      taskId: taskInfo.id,
-      newStatus: taskInfo.status,
-      oldStatus: this.currentStatus,
-      service: 'github',
-      taskTitle: taskInfo.title,
-      projectName: taskInfo.projectName || this.getProjectName()
-    };
     
-    console.log('[GitHub Tracker V3] Sending status change:', changeData);
+    // 子要素もチェック（カード要素を含む子要素）
+    const childCards = element.querySelectorAll('[data-board-card-id], [class*="card"], [class*="CardBase"]');
+    childCards.forEach(child => {
+      if (this.isGitHubCardElement(child)) {
+        elementsToCheck.push(child);
+      }
+    });
     
-    try {
-      chrome.runtime.sendMessage({
-        type: 'TASK_STATUS_CHANGED',
-        data: changeData
-      }, (response) => {
-        if (response && response.success) {
-          console.log('[GitHub Tracker V3] Status change processed successfully');
-          this.currentTaskId = taskInfo.id;
-          this.currentStatus = taskInfo.status;
+    // 兄弟要素もチェック（列内の他のタスク）
+    if (this.isGitHubColumnElement(element.parentElement)) {
+      const siblingCards = element.parentElement.querySelectorAll('[data-board-card-id], [class*="card"], [class*="CardBase"]');
+      siblingCards.forEach(sibling => {
+        if (this.isGitHubCardElement(sibling) && sibling !== element) {
+          elementsToCheck.push(sibling);
         }
       });
-    } catch (error) {
-      console.error('[GitHub Tracker V3] Error sending status change:', error);
     }
+    
+    // 重複を除去
+    return [...new Set(elementsToCheck)];
   }
 
-  extractCardInfo(cardElement) {
-    if (!cardElement) return null;
+  notifyStatusChange(changeInfo) {
+    this.sendStatusChange({
+      taskId: changeInfo.taskId,
+      newStatus: changeInfo.newStatus,
+      oldStatus: changeInfo.oldStatus,
+      service: 'github',
+      taskTitle: changeInfo.taskTitle,
+      issueKey: changeInfo.issueKey
+    });
+  }
+
+  extractTaskFromElement(element) {
+    if (!this.isGitHubCardElement(element)) return null;
     
-    const title = cardElement.querySelector('.title-module__SanitizedHtml_1--dvKYp')?.textContent?.trim();
-    const issue = cardElement.querySelector('.header-module__Text--apTHb')?.textContent?.trim();
+    const cardId = element.getAttribute('data-board-card-id');
+    if (!cardId) return null;
     
-    if (!title && !issue) return null;
+    const column = this.getColumnFromCard(element);
+    const titleElement = element.querySelector('.header-module__Text--apTHb');
+    const title = titleElement ? titleElement.textContent.trim() : null;
     
     return {
-      title: title || 'Untitled',
-      issue: issue || '',
-      id: this.generateTaskId(title, issue)
+      id: cardId,
+      status: column,
+      title: title,
+      issueKey: title,
+      spaceId: null,
+      service: 'github'
     };
   }
 
-  generateTaskId(title, issue) {
-    if (issue && issue.includes('#')) {
-      const match = issue.match(/#(\d+)/);
-      if (match) {
-        return `github-issue-${match[1]}`;
+  initializeTaskStates() {
+    console.log('[GitHub] Initializing task states');
+    
+    const cardElements = document.querySelectorAll('[data-board-card-id]');
+    console.log(`[GitHub] Found ${cardElements.length} task cards`);
+    
+    cardElements.forEach(cardElement => {
+      const task = this.extractTaskFromElement(cardElement);
+      if (task) {
+        this.lastKnownStatus.set(task.id, task.status);
+        console.log(`[GitHub] Initialized task: ${task.title} -> ${task.status}`);
+        
+        this.sendTaskInitialized({
+          taskId: task.id,
+          status: task.status,
+          taskTitle: task.title,
+          issueKey: task.issueKey
+        });
+      }
+    });
+  }
+
+  // ==========================================
+  // ポインター監視（Backlog方式）
+  // ==========================================
+  
+  setupPointerMonitoring() {
+    console.log('[GitHub] Setting up pointer monitoring');
+    
+    this.pointerStartTask = null;
+    
+    document.addEventListener('pointerdown', (e) => {
+      this.handlePointerDown(e);
+    }, true);
+    
+    document.addEventListener('pointerup', (e) => {
+      this.handlePointerUp(e);
+    }, true);
+  }
+
+  handlePointerDown(e) {
+    const taskElement = this.findTaskElement(e.target);
+    if (taskElement && this.isDraggable(taskElement)) {
+      const task = this.extractTaskFromElement(taskElement);
+      if (task) {
+        this.pointerStartTask = task;
+        // ドラッグ開始時に即座検知モードを有効化
+        this.immediateMode = true;
+        console.log('[GitHub] Pointer down on task:', task.issueKey, task.status, '(immediate mode activated)');
+      }
+    }
+  }
+
+  handlePointerUp(e) {
+    if (this.pointerStartTask) {
+      console.log('[GitHub] Pointer up, checking for status change:', this.pointerStartTask.issueKey);
+      
+      setTimeout(() => {
+        this.processPointerDragCompletion();
+      }, 150);
+      
+      // 即座検知モードを少し遅延させて無効化（Mutation検知との協調のため）
+      setTimeout(() => {
+        this.immediateMode = false;
+        console.log('[GitHub] Immediate mode deactivated');
+      }, 1000);
+    }
+  }
+
+  processPointerDragCompletion() {
+    if (!this.pointerStartTask) return;
+    
+    const originalTask = this.pointerStartTask;
+    this.pointerStartTask = null;
+    
+    // 複数回チェック
+    [100, 300, 600].forEach(delay => {
+      setTimeout(() => {
+        this.checkPointerTaskChange(originalTask);
+      }, delay);
+    });
+  }
+
+  checkPointerTaskChange(originalTask) {
+    const currentElement = this.findTaskElementById(originalTask.id, originalTask.issueKey);
+    
+    if (currentElement) {
+      const currentTask = this.extractTaskFromElement(currentElement);
+      
+      if (currentTask && currentTask.status !== originalTask.status) {
+        const now = Date.now();
+        const lastChangeTime = this.changeTimestamps.get(currentTask.id) || 0;
+        
+        // ポインター検知もデバウンスを適用
+        if (now - lastChangeTime < this.debounceDelay) {
+          console.log(`[GitHub] Debounced pointer change for ${currentTask.issueKey}`);
+          return;
+        }
+        
+        this.changeTimestamps.set(currentTask.id, now);
+        
+        const changeInfo = {
+          taskId: originalTask.id,
+          oldStatus: originalTask.status,
+          newStatus: currentTask.status,
+          taskTitle: currentTask.title,
+          issueKey: currentTask.issueKey,
+          detectionMethod: 'pointer',
+          detectionSource: 'drag-drop',
+          timestamp: now
+        };
+        
+        console.log(`[GitHub] Status change detected (pointer):`, 
+                    `${currentTask.issueKey}: ${originalTask.status} → ${currentTask.status} at ${new Date(now).toLocaleTimeString()}`);
+        
+        this.notifyStatusChange(changeInfo);
+        this.lastKnownStatus.set(originalTask.id, currentTask.status);
+      }
+    }
+  }
+
+  // ==========================================
+  // 共通ユーティリティ
+  // ==========================================
+  
+  findTaskElement(element) {
+    let current = element;
+    
+    for (let i = 0; i < 10; i++) {
+      if (!current) break;
+      
+      if (this.isGitHubCardElement(current)) {
+        return current;
+      }
+      
+      current = current.parentElement;
+    }
+    
+    return null;
+  }
+
+  findTaskElementById(taskId, issueKey) {
+    // まずIDで検索
+    const elementById = document.querySelector(`[data-board-card-id="${taskId}"]`);
+    if (elementById) return elementById;
+    
+    // issueKeyでも検索
+    if (issueKey) {
+      const allCards = document.querySelectorAll('[data-board-card-id]');
+      for (const card of allCards) {
+        const cardTask = this.extractTaskFromElement(card);
+        if (cardTask && cardTask.issueKey === issueKey) {
+          return card;
+        }
       }
     }
     
-    if (title) {
-      const cleanTitle = title.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-      return `github-task-${cleanTitle}`;
+    return null;
+  }
+
+  isDraggable(element) {
+    // GitHub Projectsのドラッグ可能要素の判定
+    return element.hasAttribute('data-board-card-id') ||
+           element.getAttribute('role') === 'button' ||
+           element.hasAttribute('draggable');
+  }
+
+  getColumnFromCard(cardElement) {
+    // カード要素から親の列情報を取得
+    let currentElement = cardElement;
+    
+    while (currentElement && currentElement !== document.body) {
+      const boardColumn = currentElement.getAttribute('data-board-column');
+      if (boardColumn) {
+        return boardColumn;
+      }
+      currentElement = currentElement.parentElement;
     }
     
-    return `github-task-${Date.now()}`;
+    return null;
   }
 
-  getProjectName() {
-    const urlMatch = window.location.href.match(/github\.com\/(orgs\/[^\/]+|users\/[^\/]+|[^\/]+\/[^\/]+)\/projects\/(\d+)/);
-    return urlMatch ? urlMatch[1] : 'Unknown Project';
+  isGitHubProjectsBoard() {
+    // GitHub Projectsのボードページかどうかを判定
+    return window.location.pathname.includes('/projects/');
   }
 
-  sendHeartbeat() {
-    try {
-      chrome.runtime.sendMessage({
-        type: 'HEARTBEAT',
-        data: { url: window.location.href }
-      });
-    } catch (error) {
-      // Silent fail
-    }
+  sendStatusChange(data) {
+    console.log('[GitHub] Sending status change to background:', data);
+    
+    chrome.runtime.sendMessage({
+      type: 'TASK_STATUS_CHANGED',
+      data: data
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('[GitHub] Error sending message:', chrome.runtime.lastError);
+      } else {
+        console.log('[GitHub] Status change sent successfully:', response);
+      }
+    });
+  }
+
+  sendTaskInitialized(data) {
+    chrome.runtime.sendMessage({
+      type: 'TASK_INITIALIZED',
+      data: {
+        taskId: data.taskId,
+        status: data.status,
+        service: 'github',
+        taskTitle: data.taskTitle,
+        issueKey: data.issueKey
+      }
+    });
   }
 }
 
-// GitHub Projects V2 ページでのみ初期化
-if (window.location.href.includes('github.com') && window.location.href.includes('/projects/')) {
-  console.log('[GitHub Tracker V3] Initializing on GitHub Projects page');
-  
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      new GitHubTaskTrackerV3();
-    });
-  } else {
-    new GitHubTaskTrackerV3();
-  }
-  
-  // ハートビート
-  setInterval(() => {
-    if (window.gitHubTrackerV3) {
-      window.gitHubTrackerV3.sendHeartbeat();
-    }
-  }, 60000);
+// GitHub Projects用のトラッカーを初期化
+console.log('[GitHub] Checking URL:', window.location.pathname);
+if (window.location.pathname.includes('/projects/')) {
+  console.log('[GitHub] Creating GitHub Projects task tracker');
+  new GitHubTaskTrackerV3();
+} else {
+  console.log('[GitHub] Not a GitHub Projects page, skipping initialization');
 }
