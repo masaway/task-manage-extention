@@ -19,12 +19,28 @@ class GitHubTaskTrackerV3 {
   }
 
   setupBannerNotification() {
-    // バナー通知の初期化を少し遅延させて、メインの検知システムと干渉しないようにする
-    setTimeout(() => {
+    // DOM readyを保証してからバナー通知システムを初期化
+    this.ensureDOMReady().then(() => {
+      console.log('[GitHubTracker] DOM ready confirmed, initializing banner notification');
       if (!window.taskTrackerBanner) {
         this.initializeBannerNotification();
+      } else {
+        console.log('[GitHubTracker] Banner notification already initialized');
       }
-    }, 100);
+    });
+  }
+
+  async ensureDOMReady() {
+    return new Promise((resolve) => {
+      if (document.readyState === 'complete') {
+        resolve();
+      } else if (document.readyState === 'interactive') {
+        // インタラクティブなら50ms待ってから開始
+        setTimeout(resolve, 50);
+      } else {
+        document.addEventListener('DOMContentLoaded', resolve, { once: true });
+      }
+    });
   }
 
   initializeBannerNotification() {
@@ -40,6 +56,28 @@ class GitHubTaskTrackerV3 {
       setupStyles() {
         if (document.getElementById('task-tracker-banner-styles')) return;
 
+        console.log('[GitHubTracker] Setting up banner styles');
+        
+        // CSPに配慮してlinkタグでCSSファイルを読み込む
+        const linkElement = document.createElement('link');
+        linkElement.id = 'task-tracker-banner-styles';
+        linkElement.rel = 'stylesheet';
+        linkElement.type = 'text/css';
+        linkElement.href = chrome.runtime.getURL('src/styles/banner-notification.css');
+        document.head.appendChild(linkElement);
+        
+        console.log('[GitHubTracker] Banner styles loaded from external CSS');
+        
+        // フォールバック: CSSファイルが読み込めない場合はインラインで設定
+        linkElement.onerror = () => {
+          console.log('[GitHubTracker] External CSS failed, falling back to inline styles');
+          this.setupInlineStyles();
+        };
+      }
+
+      setupInlineStyles() {
+        if (document.getElementById('task-tracker-banner-inline-styles')) return;
+        
         const styles = `
           .task-tracker-banner {
             position: fixed;
@@ -172,7 +210,7 @@ class GitHubTaskTrackerV3 {
         `;
 
         const styleSheet = document.createElement('style');
-        styleSheet.id = 'task-tracker-banner-styles';
+        styleSheet.id = 'task-tracker-banner-inline-styles';
         styleSheet.textContent = styles;
         document.head.appendChild(styleSheet);
       }
@@ -363,26 +401,59 @@ class GitHubTaskTrackerV3 {
   setupBackgroundMessageListener() {
     // バナー通知専用のメッセージリスナーを追加
     if (!window.githubBannerListenerAdded) {
+      console.log('[GitHubTracker] Setting up background message listener');
       chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        console.log('[GitHubTracker] Message received:', message.type, message);
         if (message.type === 'SHOW_BANNER_NOTIFICATION') {
+          console.log('[GitHubTracker] Processing banner notification:', message.data);
+          console.log('[GitHubTracker] Banner object exists:', !!window.taskTrackerBanner);
           this.handleBannerNotification(message.data);
           sendResponse({ success: true });
           return true; // 非同期レスポンスを示す
+        } else {
+          console.log('[GitHubTracker] Ignoring message type:', message.type);
         }
       });
       window.githubBannerListenerAdded = true;
+      console.log('[GitHubTracker] Background message listener setup complete');
+    } else {
+      console.log('[GitHubTracker] Background message listener already exists');
     }
   }
 
   async handleBannerNotification(data) {
+    console.log('[GitHubTracker] handleBannerNotification called with:', data);
     const { type, taskTitle, duration, projectName } = data;
     
     if (window.taskTrackerBanner) {
-      if (type === 'start') {
-        await window.taskTrackerBanner.showTaskStart(taskTitle, projectName);
-      } else if (type === 'stop') {
-        await window.taskTrackerBanner.showTaskStop(taskTitle, duration, projectName);
+      console.log('[GitHubTracker] Banner object available, showing notification');
+      try {
+        if (type === 'start') {
+          console.log('[GitHubTracker] Showing start notification');
+          await window.taskTrackerBanner.showTaskStart(taskTitle, projectName);
+        } else if (type === 'stop') {
+          console.log('[GitHubTracker] Showing stop notification');
+          await window.taskTrackerBanner.showTaskStop(taskTitle, duration, projectName);
+        } else {
+          console.log('[GitHubTracker] Unknown notification type:', type);
+        }
+        console.log('[GitHubTracker] Banner notification processed successfully');
+      } catch (error) {
+        console.error('[GitHubTracker] Error showing banner notification:', error);
       }
+    } else {
+      console.error('[GitHubTracker] Banner object not available, cannot show notification');
+      console.log('[GitHubTracker] Attempting to initialize banner now...');
+      this.initializeBannerNotification();
+      // Retry after initialization
+      setTimeout(() => {
+        if (window.taskTrackerBanner) {
+          console.log('[GitHubTracker] Retrying banner notification after delayed initialization');
+          this.handleBannerNotification(data);
+        } else {
+          console.error('[GitHubTracker] Banner initialization failed completely');
+        }
+      }, 100);
     }
   }
 

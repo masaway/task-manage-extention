@@ -27,12 +27,28 @@ class BacklogTaskTrackerV8 {
   }
 
   setupBannerNotification() {
-    // バナー通知の初期化を少し遅延させて、メインの検知システムと干渉しないようにする
-    setTimeout(() => {
+    // DOM readyを保証してからバナー通知システムを初期化
+    this.ensureDOMReady().then(() => {
+      console.log('[BacklogTracker] DOM ready confirmed, initializing banner notification');
       if (!window.taskTrackerBanner) {
         this.initializeBannerNotification();
+      } else {
+        console.log('[BacklogTracker] Banner notification already initialized');
       }
-    }, 100);
+    });
+  }
+
+  async ensureDOMReady() {
+    return new Promise((resolve) => {
+      if (document.readyState === 'complete') {
+        resolve();
+      } else if (document.readyState === 'interactive') {
+        // インタラクティブなら50ms待ってから開始
+        setTimeout(resolve, 50);
+      } else {
+        document.addEventListener('DOMContentLoaded', resolve, { once: true });
+      }
+    });
   }
 
   initializeBannerNotification() {
@@ -48,6 +64,28 @@ class BacklogTaskTrackerV8 {
       setupStyles() {
         if (document.getElementById('task-tracker-banner-styles')) return;
 
+        console.log('[BacklogTracker] Setting up banner styles');
+        
+        // CSPに配慮してlinkタグでCSSファイルを読み込む
+        const linkElement = document.createElement('link');
+        linkElement.id = 'task-tracker-banner-styles';
+        linkElement.rel = 'stylesheet';
+        linkElement.type = 'text/css';
+        linkElement.href = chrome.runtime.getURL('src/styles/banner-notification.css');
+        document.head.appendChild(linkElement);
+        
+        console.log('[BacklogTracker] Banner styles loaded from external CSS');
+        
+        // フォールバック: CSSファイルが読み込めない場合はインラインで設定
+        linkElement.onerror = () => {
+          console.log('[BacklogTracker] External CSS failed, falling back to inline styles');
+          this.setupInlineStyles();
+        };
+      }
+
+      setupInlineStyles() {
+        if (document.getElementById('task-tracker-banner-inline-styles')) return;
+        
         const styles = `
           .task-tracker-banner {
             position: fixed;
@@ -180,7 +218,7 @@ class BacklogTaskTrackerV8 {
         `;
 
         const styleSheet = document.createElement('style');
-        styleSheet.id = 'task-tracker-banner-styles';
+        styleSheet.id = 'task-tracker-banner-inline-styles';
         styleSheet.textContent = styles;
         document.head.appendChild(styleSheet);
       }
@@ -371,26 +409,59 @@ class BacklogTaskTrackerV8 {
   setupBackgroundMessageListener() {
     // バナー通知専用のメッセージリスナーを追加
     if (!window.backlogBannerListenerAdded) {
+      console.log('[BacklogTracker] Setting up background message listener');
       chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        console.log('[BacklogTracker] Message received:', message.type, message);
         if (message.type === 'SHOW_BANNER_NOTIFICATION') {
+          console.log('[BacklogTracker] Processing banner notification:', message.data);
+          console.log('[BacklogTracker] Banner object exists:', !!window.taskTrackerBanner);
           this.handleBannerNotification(message.data);
           sendResponse({ success: true });
           return true; // 非同期レスポンスを示す
+        } else {
+          console.log('[BacklogTracker] Ignoring message type:', message.type);
         }
       });
       window.backlogBannerListenerAdded = true;
+      console.log('[BacklogTracker] Background message listener setup complete');
+    } else {
+      console.log('[BacklogTracker] Background message listener already exists');
     }
   }
 
   async handleBannerNotification(data) {
+    console.log('[BacklogTracker] handleBannerNotification called with:', data);
     const { type, taskTitle, duration, projectName } = data;
     
     if (window.taskTrackerBanner) {
-      if (type === 'start') {
-        await window.taskTrackerBanner.showTaskStart(taskTitle, projectName);
-      } else if (type === 'stop') {
-        await window.taskTrackerBanner.showTaskStop(taskTitle, duration, projectName);
+      console.log('[BacklogTracker] Banner object available, showing notification');
+      try {
+        if (type === 'start') {
+          console.log('[BacklogTracker] Showing start notification');
+          await window.taskTrackerBanner.showTaskStart(taskTitle, projectName);
+        } else if (type === 'stop') {
+          console.log('[BacklogTracker] Showing stop notification');
+          await window.taskTrackerBanner.showTaskStop(taskTitle, duration, projectName);
+        } else {
+          console.log('[BacklogTracker] Unknown notification type:', type);
+        }
+        console.log('[BacklogTracker] Banner notification processed successfully');
+      } catch (error) {
+        console.error('[BacklogTracker] Error showing banner notification:', error);
       }
+    } else {
+      console.error('[BacklogTracker] Banner object not available, cannot show notification');
+      console.log('[BacklogTracker] Attempting to initialize banner now...');
+      this.initializeBannerNotification();
+      // Retry after initialization
+      setTimeout(() => {
+        if (window.taskTrackerBanner) {
+          console.log('[BacklogTracker] Retrying banner notification after delayed initialization');
+          this.handleBannerNotification(data);
+        } else {
+          console.error('[BacklogTracker] Banner initialization failed completely');
+        }
+      }, 100);
     }
   }
 

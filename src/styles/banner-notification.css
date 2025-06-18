@@ -1,0 +1,128 @@
+.task-tracker-banner {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  min-width: 320px;
+  max-width: 450px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  z-index: 999999;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.task-tracker-banner.show {
+  transform: translateX(0);
+}
+
+.task-tracker-banner.hide {
+  transform: translateX(100%);
+}
+
+.task-tracker-banner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.task-tracker-banner-icon {
+  font-size: 20px;
+  margin-right: 8px;
+}
+
+.task-tracker-banner-title {
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.task-tracker-banner-close {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  font-size: 18px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.task-tracker-banner-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.task-tracker-banner-content {
+  padding: 12px 20px 16px 20px;
+}
+
+.task-tracker-banner-task-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: #f0f0f0;
+}
+
+.task-tracker-banner-details {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+}
+
+.task-tracker-banner-duration {
+  background: rgba(255, 255, 255, 0.15);
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 500;
+  margin-top: 6px;
+}
+
+.task-tracker-banner.start {
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+}
+
+.task-tracker-banner.stop {
+  background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+}
+
+.task-tracker-banner-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 0 0 12px 12px;
+  animation: bannerProgress 4s linear forwards;
+}
+
+@keyframes bannerProgress {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+
+.task-tracker-banner:hover .task-tracker-banner-progress {
+  animation-play-state: paused;
+}
+
+@media (max-width: 768px) {
+  .task-tracker-banner {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    min-width: auto;
+    max-width: none;
+  }
+}

@@ -8,7 +8,8 @@
     "storage",
     "activeTab",
     "scripting",
-    "webRequest"
+    "webRequest",
+    "notifications"
   ],
   
   "host_permissions": [
@@ -37,6 +38,19 @@
       ],
       "js": ["src/scripts/content-github-v3.js"],
       "run_at": "document_start"
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/styles/banner-notification.css"
+      ],
+      "matches": [
+        "*://*.backlog.jp/*",
+        "*://*.backlog.com/*",
+        "*://github.com/*"
+      ]
     }
   ],
   
