@@ -83,7 +83,7 @@ class PopupController {
         <div class="task-info">
           <div class="task-title">${this.escapeHtml(timer.taskTitle)}</div>
           <div class="task-project">
-            ${timer.service === 'backlog' && timer.spaceId ? `[${timer.spaceId}] ` : ''}${timer.taskId}
+            ${timer.service === 'backlog' && timer.spaceId ? `[${timer.spaceId}] ` : ''}${timer.issueKey || timer.taskId}
           </div>
           ${timer.projectName ? `<div class="project-name">${this.escapeHtml(timer.projectName)}</div>` : ''}
         </div>

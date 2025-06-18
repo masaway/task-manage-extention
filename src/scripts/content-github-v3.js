@@ -396,8 +396,15 @@ class GitHubTaskTrackerV3 {
     if (!window.githubBannerListenerAdded) {
       chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.type === 'SHOW_BANNER_NOTIFICATION') {
-          this.handleBannerNotification(message.data);
-          sendResponse({ success: true });
+          // GitHubサービスの通知のみ処理
+          if (message.data && message.data.service === 'github') {
+            console.log('[GitHubTracker] Processing banner notification for GitHub service');
+            this.handleBannerNotification(message.data);
+            sendResponse({ success: true, processed: true });
+          } else {
+            console.log('[GitHubTracker] Ignoring non-GitHub banner notification');
+            sendResponse({ success: false, processed: false });
+          }
           return true; // 非同期レスポンスを示す
         }
       });
@@ -759,6 +766,7 @@ class GitHubTaskTrackerV3 {
           newStatus: task.status,
           taskTitle: task.title,
           issueKey: task.issueKey,
+          projectName: task.projectName,
           detectionMethod: 'mutation',
           detectionSource: detectionSource,
           timestamp: now
@@ -815,6 +823,7 @@ class GitHubTaskTrackerV3 {
       oldStatus: changeInfo.oldStatus,
       service: 'github',
       taskTitle: changeInfo.taskTitle,
+      projectName: changeInfo.projectName,
       issueKey: changeInfo.issueKey
     });
   }
@@ -826,14 +835,38 @@ class GitHubTaskTrackerV3 {
     if (!cardId) return null;
     
     const column = this.getColumnFromCard(element);
-    const titleElement = element.querySelector('.header-module__Text--apTHb');
+    
+    // github-page.htmlの実際の構造に基づく要素取得
+    const issueKeyElement = element.querySelector('.header-module__Text--apTHb');
+    const titleElement = element.querySelector('.title-module__SanitizedHtml_1--dvKYp');
+    
+    const fullIssueText = issueKeyElement ? issueKeyElement.textContent.trim() : null;
     const title = titleElement ? titleElement.textContent.trim() : null;
+    
+    // fullIssueTextから#6部分を抽出（例: "tomica-vault #6" → "#6"）
+    let issueKey = null;
+    let projectName = null;
+    
+    if (fullIssueText) {
+      const match = fullIssueText.match(/^(.+?)\s+(#\d+)$/);
+      if (match) {
+        projectName = match[1]; // "tomica-vault"
+        issueKey = match[2];    // "#6"
+      } else {
+        // フォールバック: 全体をissueKeyとして使用
+        issueKey = fullIssueText;
+      }
+    }
+    
+    // issueKeyが見つからない場合はフォールバック
+    const fallbackIssueKey = issueKey || `#${cardId}`;
     
     return {
       id: cardId,
       status: column,
-      title: title,
-      issueKey: title,
+      title: title || fallbackIssueKey,
+      issueKey: fallbackIssueKey,
+      projectName: projectName,
       spaceId: null,
       service: 'github'
     };
@@ -855,7 +888,8 @@ class GitHubTaskTrackerV3 {
           taskId: task.id,
           status: task.status,
           taskTitle: task.title,
-          issueKey: task.issueKey
+          issueKey: task.issueKey,
+          projectName: task.projectName
         });
       }
     });
@@ -946,6 +980,7 @@ class GitHubTaskTrackerV3 {
           newStatus: currentTask.status,
           taskTitle: currentTask.title,
           issueKey: currentTask.issueKey,
+          projectName: currentTask.projectName,
           detectionMethod: 'pointer',
           detectionSource: 'drag-drop',
           timestamp: now
@@ -1029,29 +1064,38 @@ class GitHubTaskTrackerV3 {
   sendStatusChange(data) {
     console.log('[GitHub] Sending status change to background:', data);
     
-    chrome.runtime.sendMessage({
-      type: 'TASK_STATUS_CHANGED',
-      data: data
-    }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('[GitHub] Error sending message:', chrome.runtime.lastError);
-      } else {
-        console.log('[GitHub] Status change sent successfully:', response);
-      }
-    });
+    try {
+      chrome.runtime.sendMessage({
+        type: 'TASK_STATUS_CHANGED',
+        data: data
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('[GitHub] Error sending message:', chrome.runtime.lastError);
+        } else {
+          console.log('[GitHub] Status change sent successfully:', response);
+        }
+      });
+    } catch (error) {
+      console.error('[GitHub] Extension context invalidated, unable to send message:', error);
+    }
   }
 
   sendTaskInitialized(data) {
-    chrome.runtime.sendMessage({
-      type: 'TASK_INITIALIZED',
-      data: {
-        taskId: data.taskId,
-        status: data.status,
-        service: 'github',
-        taskTitle: data.taskTitle,
-        issueKey: data.issueKey
-      }
-    });
+    try {
+      chrome.runtime.sendMessage({
+        type: 'TASK_INITIALIZED',
+        data: {
+          taskId: data.taskId,
+          status: data.status,
+          service: 'github',
+          taskTitle: data.taskTitle,
+          projectName: data.projectName,
+          issueKey: data.issueKey
+        }
+      });
+    } catch (error) {
+      console.error('[GitHub] Extension context invalidated, unable to send task initialization:', error);
+    }
   }
 }
 

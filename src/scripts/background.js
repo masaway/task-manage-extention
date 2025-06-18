@@ -661,8 +661,29 @@ class TaskTimeTracker {
     console.log('[Background] Sending banner notification:', data);
     console.log('[Background] Preferred tab ID:', preferredTabId);
     
+    // バナー通知の重複を防ぐため、送信履歴を管理
+    const notificationKey = `${data.type}_${data.taskTitle}_${Date.now()}`;
+    if (this.recentBannerNotifications && this.recentBannerNotifications.has(notificationKey)) {
+      console.log('[Background] Duplicate banner notification prevented:', notificationKey);
+      return;
+    }
+    
+    // 最近の通知履歴を初期化（5秒間の重複を防ぐ）
+    if (!this.recentBannerNotifications) {
+      this.recentBannerNotifications = new Map();
+    }
+    this.recentBannerNotifications.set(notificationKey, Date.now());
+    
+    // 古い履歴を削除
+    const fiveSecondsAgo = Date.now() - 5000;
+    for (const [key, timestamp] of this.recentBannerNotifications.entries()) {
+      if (timestamp < fiveSecondsAgo) {
+        this.recentBannerNotifications.delete(key);
+      }
+    }
+    
     try {
-      // 優先的に指定されたタブに送信
+      // 優先的に指定されたタブに送信（最優先）
       if (preferredTabId) {
         try {
           console.log(`[Background] Attempting to send message to preferred tab ${preferredTabId}`);
@@ -674,72 +695,77 @@ class TaskTimeTracker {
           return;
         } catch (error) {
           console.log(`[Background] Preferred tab ${preferredTabId} not available:`, error.message);
-          console.log(`[Background] Error details:`, error);
         }
       }
 
-      // サービスに応じて適切なタブを探す
+      // サービスに応じて適切なタブを探す（厳密にサービスを一致させる）
       let urlPatterns = [];
       if (data.service === 'backlog') {
         urlPatterns = ["*://*.backlog.jp/*", "*://*.backlog.com/*"];
       } else if (data.service === 'github') {
         urlPatterns = ["*://github.com/*"];
       } else {
-        // すべてのタブを対象にする
-        urlPatterns = ["*://*.backlog.jp/*", "*://*.backlog.com/*", "*://github.com/*"];
+        console.log('[Background] Unknown service, using fallback notification');
+        this.sendFallbackNotification(data);
+        return;
       }
 
       console.log('[Background] Looking for tabs with URL patterns:', urlPatterns);
       const tabs = await chrome.tabs.query({
-        url: urlPatterns
+        url: urlPatterns,
+        status: 'complete' // 完全に読み込まれたタブのみ
       });
       console.log('[Background] Found tabs:', tabs.length);
 
-      let sent = false;
-      for (const tab of tabs) {
-        console.log(`[Background] Trying to send to tab ${tab.id}: ${tab.url}`);
+      // アクティブなタブを優先
+      const activeTabs = tabs.filter(tab => tab.active);
+      const inactiveTabs = tabs.filter(tab => !tab.active);
+      const prioritizedTabs = [...activeTabs, ...inactiveTabs];
+
+      for (const tab of prioritizedTabs) {
+        console.log(`[Background] Trying to send to tab ${tab.id}: ${tab.url} (active: ${tab.active})`);
         try {
           await chrome.tabs.sendMessage(tab.id, {
             type: 'SHOW_BANNER_NOTIFICATION',
             data: data
           });
           console.log(`[Background] Banner notification sent successfully to tab ${tab.id} (${tab.url})`);
-          sent = true;
-          break; // 最初に成功したタブのみに送信
+          return; // 1つのタブに送信できたら終了
         } catch (error) {
           console.log(`[Background] Tab ${tab.id} not ready for banner notification:`, error.message);
-          console.log(`[Background] Tab ${tab.id} error details:`, error);
         }
       }
 
-      if (!sent) {
-        console.log('[Background] No suitable tabs found for banner notification');
-        console.log('[Background] Available tabs:', tabs.map(t => ({ id: t.id, url: t.url })));
-        
-        // フォールバック: バナー通知が送信できない場合はchrome.notificationsを使用
-        try {
-          const notificationTitle = data.type === 'start' ? 'タスク計測開始' : 'タスク計測終了';
-          let message = `${data.taskTitle}`;
-          
-          if (data.type === 'stop' && data.duration) {
-            const durationText = this.formatDuration(data.duration);
-            message += ` - 作業時間: ${durationText}`;
-          }
-          
-          chrome.notifications.create({
-            type: 'basic',
-            iconUrl: '/src/icons/icon48.svg',
-            title: notificationTitle,
-            message: message
-          });
-          
-          console.log('[Background] Fallback notification sent via chrome.notifications');
-        } catch (error) {
-          console.error('[Background] Error sending fallback notification:', error);
-        }
-      }
+      // どのタブにも送信できなかった場合はフォールバック通知
+      console.log('[Background] No suitable tabs found for banner notification');
+      this.sendFallbackNotification(data);
+      
     } catch (error) {
       console.error('[Background] Error sending banner notification:', error);
+      this.sendFallbackNotification(data);
+    }
+  }
+
+  sendFallbackNotification(data) {
+    try {
+      const notificationTitle = data.type === 'start' ? 'タスク計測開始' : 'タスク計測終了';
+      let message = `${data.taskTitle}`;
+      
+      if (data.type === 'stop' && data.duration) {
+        const durationText = this.formatDuration(data.duration);
+        message += ` - 作業時間: ${durationText}`;
+      }
+      
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: '/src/icons/icon48.svg',
+        title: notificationTitle,
+        message: message
+      });
+      
+      console.log('[Background] Fallback notification sent via chrome.notifications');
+    } catch (error) {
+      console.error('[Background] Error sending fallback notification:', error);
     }
   }
 }

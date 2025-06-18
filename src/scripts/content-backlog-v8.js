@@ -409,23 +409,21 @@ class BacklogTaskTrackerV8 {
   setupBackgroundMessageListener() {
     // バナー通知専用のメッセージリスナーを追加
     if (!window.backlogBannerListenerAdded) {
-      console.log('[BacklogTracker] Setting up background message listener');
       chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        console.log('[BacklogTracker] Message received:', message.type, message);
         if (message.type === 'SHOW_BANNER_NOTIFICATION') {
-          console.log('[BacklogTracker] Processing banner notification:', message.data);
-          console.log('[BacklogTracker] Banner object exists:', !!window.taskTrackerBanner);
-          this.handleBannerNotification(message.data);
-          sendResponse({ success: true });
+          // Backlogサービスの通知のみ処理
+          if (message.data && message.data.service === 'backlog') {
+            console.log('[BacklogTracker] Processing banner notification for Backlog service');
+            this.handleBannerNotification(message.data);
+            sendResponse({ success: true, processed: true });
+          } else {
+            console.log('[BacklogTracker] Ignoring non-Backlog banner notification');
+            sendResponse({ success: false, processed: false });
+          }
           return true; // 非同期レスポンスを示す
-        } else {
-          console.log('[BacklogTracker] Ignoring message type:', message.type);
         }
       });
       window.backlogBannerListenerAdded = true;
-      console.log('[BacklogTracker] Background message listener setup complete');
-    } else {
-      console.log('[BacklogTracker] Background message listener already exists');
     }
   }
 
@@ -1425,7 +1423,7 @@ class BacklogTaskTrackerV8 {
         }
       });
     } catch (error) {
-      console.log('[Backlog] Error notifying task initialization:', error);
+      console.error('[Backlog] Extension context invalidated, unable to send task initialization:', error);
     }
   }
 
@@ -1448,7 +1446,7 @@ class BacklogTaskTrackerV8 {
         }
       });
     } catch (error) {
-      console.log('[Backlog] Error notifying status change:', error);
+      console.error('[Backlog] Extension context invalidated, unable to send status change:', error);
     }
   }
 
