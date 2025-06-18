@@ -150,9 +150,20 @@ class TaskTimeTracker {
       activeTimers: Object.fromEntries(this.activeTimers)
     });
 
-    if ((await this.getSettings()).notifications) {
+    const settings = await this.getSettings();
+    
+    // 既存の通知システム
+    if (settings.notifications) {
       this.showNotification('タスク開始', `「${timerData.taskTitle}」の時間計測を開始しました`);
     }
+
+    // バナー通知を送信
+    await this.sendBannerNotification({
+      type: 'start',
+      taskTitle: timerData.taskTitle,
+      projectName: timerData.projectName,
+      service: timerData.service
+    }, timerData.tabId);
   }
 
   async stopTimer(timerKey) {
@@ -186,10 +197,22 @@ class TaskTimeTracker {
       activeTimers: Object.fromEntries(this.activeTimers)
     });
 
-    if ((await this.getSettings()).notifications) {
+    const settings = await this.getSettings();
+
+    // 既存の通知システム
+    if (settings.notifications) {
       const durationText = this.formatDuration(duration);
       this.showNotification('タスク完了', `「${timer.taskTitle}」の作業時間: ${durationText}`);
     }
+
+    // バナー通知を送信
+    await this.sendBannerNotification({
+      type: 'stop',
+      taskTitle: timer.taskTitle,
+      duration: duration,
+      projectName: timer.projectName,
+      service: timer.service
+    }, timer.tabId);
   }
 
   async pauseTimer(timerKey) {
@@ -631,6 +654,62 @@ class TaskTimeTracker {
       }
     } catch (error) {
       console.error('[Background] Error handling Kanban request:', error);
+    }
+  }
+
+  async sendBannerNotification(data, preferredTabId = null) {
+    console.log('[Background] Sending banner notification:', data);
+    
+    try {
+      // 優先的に指定されたタブに送信
+      if (preferredTabId) {
+        try {
+          await chrome.tabs.sendMessage(preferredTabId, {
+            type: 'SHOW_BANNER_NOTIFICATION',
+            data: data
+          });
+          console.log(`[Background] Banner notification sent to preferred tab ${preferredTabId}`);
+          return;
+        } catch (error) {
+          console.log(`[Background] Preferred tab ${preferredTabId} not available:`, error.message);
+        }
+      }
+
+      // サービスに応じて適切なタブを探す
+      let urlPatterns = [];
+      if (data.service === 'backlog') {
+        urlPatterns = ["*://*.backlog.jp/*", "*://*.backlog.com/*"];
+      } else if (data.service === 'github') {
+        urlPatterns = ["*://github.com/*"];
+      } else {
+        // すべてのタブを対象にする
+        urlPatterns = ["*://*.backlog.jp/*", "*://*.backlog.com/*", "*://github.com/*"];
+      }
+
+      const tabs = await chrome.tabs.query({
+        url: urlPatterns
+      });
+
+      let sent = false;
+      for (const tab of tabs) {
+        try {
+          await chrome.tabs.sendMessage(tab.id, {
+            type: 'SHOW_BANNER_NOTIFICATION',
+            data: data
+          });
+          console.log(`[Background] Banner notification sent to tab ${tab.id} (${tab.url})`);
+          sent = true;
+          break; // 最初に成功したタブのみに送信
+        } catch (error) {
+          console.log(`[Background] Tab ${tab.id} not ready for banner notification:`, error.message);
+        }
+      }
+
+      if (!sent) {
+        console.log('[Background] No suitable tabs found for banner notification');
+      }
+    } catch (error) {
+      console.error('[Background] Error sending banner notification:', error);
     }
   }
 }

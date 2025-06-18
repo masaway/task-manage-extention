@@ -10,7 +10,380 @@ class GitHubTaskTrackerV3 {
     this.originalPushState = history.pushState;
     this.originalReplaceState = history.replaceState;
     
+    // メイン機能を先に初期化
     this.init();
+    
+    // バナー通知システムを後で初期化
+    this.setupBannerNotification();
+    this.setupBackgroundMessageListener();
+  }
+
+  setupBannerNotification() {
+    // バナー通知の初期化を少し遅延させて、メインの検知システムと干渉しないようにする
+    setTimeout(() => {
+      if (!window.taskTrackerBanner) {
+        this.initializeBannerNotification();
+      }
+    }, 100);
+  }
+
+  initializeBannerNotification() {
+    // バナー通知システムを直接初期化（BacklogTaskTrackerV8と同じ実装）
+    class BannerNotification {
+      constructor() {
+        this.currentBanner = null;
+        this.bannerQueue = [];
+        this.isShowing = false;
+        this.setupStyles();
+      }
+
+      setupStyles() {
+        if (document.getElementById('task-tracker-banner-styles')) return;
+
+        const styles = `
+          .task-tracker-banner {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            min-width: 320px;
+            max-width: 450px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+            z-index: 999999;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            line-height: 1.4;
+            transform: translateX(100%);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+          }
+
+          .task-tracker-banner.show {
+            transform: translateX(0);
+          }
+
+          .task-tracker-banner.hide {
+            transform: translateX(100%);
+          }
+
+          .task-tracker-banner-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px 12px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+          }
+
+          .task-tracker-banner-icon {
+            font-size: 20px;
+            margin-right: 8px;
+          }
+
+          .task-tracker-banner-title {
+            display: flex;
+            align-items: center;
+            font-weight: 600;
+            font-size: 15px;
+          }
+
+          .task-tracker-banner-close {
+            background: none;
+            border: none;
+            color: rgba(255, 255, 255, 0.8);
+            cursor: pointer;
+            font-size: 18px;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: all 0.2s;
+          }
+
+          .task-tracker-banner-close:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+          }
+
+          .task-tracker-banner-content {
+            padding: 12px 20px 16px 20px;
+          }
+
+          .task-tracker-banner-task-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #f0f0f0;
+          }
+
+          .task-tracker-banner-details {
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 13px;
+          }
+
+          .task-tracker-banner-duration {
+            background: rgba(255, 255, 255, 0.15);
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-weight: 500;
+            margin-top: 6px;
+          }
+
+          .task-tracker-banner.start {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+          }
+
+          .task-tracker-banner.stop {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+          }
+
+          .task-tracker-banner-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 0 0 12px 12px;
+            animation: bannerProgress 4s linear forwards;
+          }
+
+          @keyframes bannerProgress {
+            from { width: 100%; }
+            to { width: 0%; }
+          }
+
+          .task-tracker-banner:hover .task-tracker-banner-progress {
+            animation-play-state: paused;
+          }
+
+          @media (max-width: 768px) {
+            .task-tracker-banner {
+              top: 10px;
+              right: 10px;
+              left: 10px;
+              min-width: auto;
+              max-width: none;
+            }
+          }
+        `;
+
+        const styleSheet = document.createElement('style');
+        styleSheet.id = 'task-tracker-banner-styles';
+        styleSheet.textContent = styles;
+        document.head.appendChild(styleSheet);
+      }
+
+      show(options) {
+        const { type, title, taskTitle, duration, projectName } = options;
+        
+        if (this.currentBanner) {
+          this.hide(true);
+        }
+
+        this.bannerQueue.push({ type, title, taskTitle, duration, projectName });
+        
+        if (!this.isShowing) {
+          this.showNext();
+        }
+      }
+
+      showNext() {
+        if (this.bannerQueue.length === 0) {
+          this.isShowing = false;
+          return;
+        }
+
+        this.isShowing = true;
+        const options = this.bannerQueue.shift();
+        this.createBanner(options);
+      }
+
+      createBanner({ type, title, taskTitle, duration, projectName }) {
+        this.removeBanner();
+
+        const banner = document.createElement('div');
+        banner.className = `task-tracker-banner ${type}`;
+        
+        const icon = type === 'start' ? '⏰' : '✅';
+        const titleText = title || (type === 'start' ? 'タスク計測開始' : 'タスク計測終了');
+        
+        let contentHTML = `
+          <div class="task-tracker-banner-header">
+            <div class="task-tracker-banner-title">
+              <span class="task-tracker-banner-icon">${icon}</span>
+              ${titleText}
+            </div>
+            <button class="task-tracker-banner-close">×</button>
+          </div>
+          <div class="task-tracker-banner-content">
+            <div class="task-tracker-banner-task-title">${taskTitle || 'Unknown Task'}</div>
+            <div class="task-tracker-banner-details">
+        `;
+
+        if (projectName) {
+          contentHTML += `プロジェクト: ${projectName}<br>`;
+        }
+
+        if (type === 'start') {
+          contentHTML += '時間計測を開始しました';
+        } else if (type === 'stop' && duration) {
+          contentHTML += `作業時間: <span class="task-tracker-banner-duration">${this.formatDuration(duration)}</span>`;
+        } else {
+          contentHTML += '時間計測を終了しました';
+        }
+
+        contentHTML += `
+            </div>
+          </div>
+          <div class="task-tracker-banner-progress"></div>
+        `;
+
+        banner.innerHTML = contentHTML;
+        
+        banner.querySelector('.task-tracker-banner-close').addEventListener('click', () => {
+          this.hide();
+        });
+
+        banner.addEventListener('click', () => {
+          this.hide();
+        });
+
+        let hideTimeout;
+        banner.addEventListener('mouseenter', () => {
+          if (hideTimeout) {
+            clearTimeout(hideTimeout);
+            hideTimeout = null;
+          }
+        });
+
+        banner.addEventListener('mouseleave', () => {
+          hideTimeout = setTimeout(() => {
+            this.hide();
+          }, 1000);
+        });
+
+        document.body.appendChild(banner);
+        this.currentBanner = banner;
+
+        setTimeout(() => {
+          banner.classList.add('show');
+        }, 50);
+
+        hideTimeout = setTimeout(() => {
+          this.hide();
+        }, 4000);
+      }
+
+      hide(immediate = false) {
+        if (!this.currentBanner) return;
+
+        if (immediate) {
+          this.removeBanner();
+          this.showNext();
+          return;
+        }
+
+        this.currentBanner.classList.add('hide');
+        this.currentBanner.classList.remove('show');
+
+        setTimeout(() => {
+          this.removeBanner();
+          this.showNext();
+        }, 300);
+      }
+
+      removeBanner() {
+        if (this.currentBanner) {
+          if (this.currentBanner.parentNode) {
+            this.currentBanner.parentNode.removeChild(this.currentBanner);
+          }
+          this.currentBanner = null;
+        }
+      }
+
+      formatDuration(ms) {
+        const seconds = Math.floor(ms / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+
+        if (hours > 0) {
+          return `${hours}時間${minutes % 60}分`;
+        } else if (minutes > 0) {
+          return `${minutes}分`;
+        } else {
+          return `${seconds}秒`;
+        }
+      }
+
+      async shouldShowBanner() {
+        try {
+          const response = await new Promise((resolve) => {
+            chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, resolve);
+          });
+          
+          if (response && response.success && response.settings) {
+            return response.settings.bannerNotifications !== false;
+          }
+        } catch (error) {
+          console.log('[Banner] Settings not available, using default behavior');
+        }
+        
+        return true;
+      }
+
+      async showTaskStart(taskTitle, projectName) {
+        if (await this.shouldShowBanner()) {
+          this.show({
+            type: 'start',
+            taskTitle,
+            projectName
+          });
+        }
+      }
+
+      async showTaskStop(taskTitle, duration, projectName) {
+        if (await this.shouldShowBanner()) {
+          this.show({
+            type: 'stop',
+            taskTitle,
+            duration,
+            projectName
+          });
+        }
+      }
+    }
+
+    window.taskTrackerBanner = new BannerNotification();
+  }
+
+  setupBackgroundMessageListener() {
+    // バナー通知専用のメッセージリスナーを追加
+    if (!window.githubBannerListenerAdded) {
+      chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.type === 'SHOW_BANNER_NOTIFICATION') {
+          this.handleBannerNotification(message.data);
+          sendResponse({ success: true });
+          return true; // 非同期レスポンスを示す
+        }
+      });
+      window.githubBannerListenerAdded = true;
+    }
+  }
+
+  async handleBannerNotification(data) {
+    const { type, taskTitle, duration, projectName } = data;
+    
+    if (window.taskTrackerBanner) {
+      if (type === 'start') {
+        await window.taskTrackerBanner.showTaskStart(taskTitle, projectName);
+      } else if (type === 'stop') {
+        await window.taskTrackerBanner.showTaskStop(taskTitle, duration, projectName);
+      }
+    }
   }
 
   init() {
@@ -217,7 +590,10 @@ class GitHubTaskTrackerV3 {
 
   handleCardEvent(eventType, e) {
     const cardElement = this.isCardElement(e.target);
-    if (!cardElement) return;
+    if (!cardElement) {
+      console.log('[GitHub Tracker V3] Event target is not a card element:', eventType, e.target);
+      return;
+    }
     
     if (eventType === 'dragstart') {
       this.draggedCardInfo = this.extractCardInfo(cardElement);
