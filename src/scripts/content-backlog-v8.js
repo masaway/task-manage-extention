@@ -2,6 +2,7 @@ class BacklogTaskTrackerV8 {
   constructor() {
     this.taskStates = new Map();
     this.isDisabled = false; // Extension context無効化フラグ
+    this.trackingStatus = null; // ユーザー設定の計測対象ステータス
     this.detectionMethods = {
       mutation: true,
       pointer: true
@@ -21,10 +22,12 @@ class BacklogTaskTrackerV8 {
     this.checkExtensionContext();
 
     if (!this.isDisabled) {
-      // タスク検知システムを先に初期化
-      this.setupMutationObserver();
-      this.setupPointerMonitoring();
-      this.initializeTaskStates();
+      // 設定を読み込んでからタスク検知システムを初期化
+      this.loadSettings().then(() => {
+        this.setupMutationObserver();
+        this.setupPointerMonitoring();
+        this.initializeTaskStates();
+      });
       
       this.setupBackgroundMessageListener();
     } else {
@@ -43,6 +46,18 @@ class BacklogTaskTrackerV8 {
 
   setupBackgroundMessageListener() {
     // 必要に応じて将来的にメッセージリスナーを追加
+  }
+
+  async loadSettings() {
+    try {
+      const result = await chrome.storage.local.get(['settings']);
+      this.trackingStatus = result.settings?.trackingStatuses?.backlog?.start?.[0] || null;
+      console.log('[Backlog] Tracking status loaded:', this.trackingStatus);
+      console.log('[Backlog] Full settings:', result.settings?.trackingStatuses);
+    } catch (error) {
+      console.warn('[Backlog] Failed to load settings:', error);
+      this.trackingStatus = null;
+    }
   }
 
 
@@ -400,20 +415,29 @@ class BacklogTaskTrackerV8 {
       if (oldStatus && oldStatus !== task.status) {
         this.changeTimestamps.set(task.id, now);
         
-        const changeInfo = {
-          taskId: task.id,
-          oldStatus: oldStatus,
-          newStatus: task.status,
-          taskTitle: task.title,
-          issueKey: task.issueKey,
-          spaceId: task.spaceId,
-          detectionMethod: 'mutation',
-          detectionSource: detectionSource,
-          timestamp: now
-        };
+        // ユーザー設定のステータスと比較して計測開始/終了を判定
+        const isTrackingStart = (task.status === this.trackingStatus);
+        const isTrackingEnd = (oldStatus === this.trackingStatus && task.status !== this.trackingStatus);
         
+        console.log(`[Backlog] Status change: "${oldStatus}" → "${task.status}" (tracking: "${this.trackingStatus}", start: ${isTrackingStart}, end: ${isTrackingEnd})`);
         
-        this.notifyStatusChange(changeInfo);
+        if (isTrackingStart || isTrackingEnd) {
+          const changeInfo = {
+            taskId: task.id,
+            oldStatus: oldStatus,
+            newStatus: task.status,
+            taskTitle: task.title,
+            issueKey: task.issueKey,
+            spaceId: task.spaceId,
+            detectionMethod: 'mutation',
+            detectionSource: detectionSource,
+            timestamp: now,
+            isTrackingStart: isTrackingStart,
+            isTrackingEnd: isTrackingEnd
+          };
+          
+          this.notifyStatusChange(changeInfo);
+        }
       }
       
       this.taskStates.set(task.id, task.status);
@@ -530,20 +554,30 @@ class BacklogTaskTrackerV8 {
         
         this.changeTimestamps.set(currentTask.id, now);
         
-        const changeInfo = {
-          taskId: originalTask.id,
-          oldStatus: originalTask.status,
-          newStatus: currentTask.status,
-          taskTitle: currentTask.title,
-          issueKey: currentTask.issueKey,
-          spaceId: currentTask.spaceId,
-          detectionMethod: 'pointer',
-          detectionSource: 'drag-drop',
-          timestamp: now
-        };
+        // ユーザー設定のステータスと比較して計測開始/終了を判定
+        const isTrackingStart = (currentTask.status === this.trackingStatus);
+        const isTrackingEnd = (originalTask.status === this.trackingStatus && currentTask.status !== this.trackingStatus);
         
+        console.log(`[Backlog] Pointer status change: "${originalTask.status}" → "${currentTask.status}" (tracking: "${this.trackingStatus}", start: ${isTrackingStart}, end: ${isTrackingEnd})`);
         
-        this.notifyStatusChange(changeInfo);
+        if (isTrackingStart || isTrackingEnd) {
+          const changeInfo = {
+            taskId: originalTask.id,
+            oldStatus: originalTask.status,
+            newStatus: currentTask.status,
+            taskTitle: currentTask.title,
+            issueKey: currentTask.issueKey,
+            spaceId: currentTask.spaceId,
+            detectionMethod: 'pointer',
+            detectionSource: 'drag-drop',
+            timestamp: now,
+            isTrackingStart: isTrackingStart,
+            isTrackingEnd: isTrackingEnd
+          };
+          
+          this.notifyStatusChange(changeInfo);
+        }
+        
         this.taskStates.set(originalTask.id, currentTask.status);
       }
     }
@@ -831,10 +865,8 @@ class BacklogTaskTrackerV8 {
             if (!headerText || !this.isValidStatus(headerText)) {
               headerText = header.textContent?.trim();
               // ステータステキストのみを抽出（数字を含む）
-              const statusMatch = headerText?.match(/(未対応|処理中|処理済み|完了|レビュー|todo|doing|done|review|progress|complete|open|closed|new|finished)[\d\s]*/i);
-              if (statusMatch) {
-                headerText = statusMatch[1];
-              }
+              // シンプルなテキスト抽出（ユーザー設定ステータスとの比較用）
+              headerText = headerText?.replace(/[\d\(\)\[\]]/g, '').trim();
             }
             
             if (headerText && this.isValidStatus(headerText)) {
@@ -857,46 +889,15 @@ class BacklogTaskTrackerV8 {
   }
 
   isValidStatus(text) {
-    if (!text) return false;
-    
-    const statusKeywords = [
-      '未対応', '新規', 'todo', 'open', 'new', 'backlog',
-      '処理中', '進行中', 'progress', 'doing', 'in progress', '対応中',
-      '処理済み', '処理済', 'processed', 'resolved',
-      '完了', '終了', 'done', 'complete', 'finished', 'closed',
-      'レビュー', 'review', 'testing', 'テスト', '確認'
-    ];
-    
-    const lowerText = text.toLowerCase();
-    return statusKeywords.some(keyword => lowerText.includes(keyword.toLowerCase()));
+    // 空でないテキストなら有効（ユーザー設定との比較は別途実施）
+    return text && text.trim().length > 0;
   }
 
   normalizeStatus(rawStatus) {
-    if (!rawStatus) return 'Unknown';
+    if (!rawStatus) return null;
     
-    const status = rawStatus.toString().toLowerCase();
-    
-    // 数字とマークを除去
-    const cleaned = rawStatus.replace(/[\d\(\)\[\]]/g, '').trim();
-    
-    // 処理済みの判定を処理中より前に
-    if (status.includes('処理済') || status.includes('processed') || status.includes('resolved')) {
-      return '処理済み';
-    }
-    if (status.includes('処理中') || status.includes('progress') || status.includes('doing') || status.includes('対応中')) {
-      return '処理中';
-    }
-    if (status.includes('完了') || status.includes('done') || status.includes('complete') || status.includes('finished')) {
-      return '完了';
-    }
-    if (status.includes('未対応') || status.includes('todo') || status.includes('open') || status.includes('new') || status.includes('backlog')) {
-      return '未対応';
-    }
-    if (status.includes('review') || status.includes('レビュー') || status.includes('確認')) {
-      return 'レビュー';
-    }
-    
-    return cleaned || 'Unknown';
+    // 数字とマークを除去してそのまま返す
+    return rawStatus.toString().replace(/[\d\(\)\[\]]/g, '').trim();
   }
 
   // ==========================================
@@ -904,15 +905,16 @@ class BacklogTaskTrackerV8 {
   // ==========================================
   
   getStatusNameById(statusId) {
-    // 一般的なBacklogステータスID マッピング
-    const statusMap = {
-      '1': '未対応',
-      '2': '処理中',
-      '3': '処理済み',
-      '4': '完了'
-    };
-    
-    return statusMap[statusId.toString()] || 'Unknown';
+    // ステータスIDからステータス名を取得（実際のDOM要素から）
+    const statusElement = document.querySelector(`[data-statusid="${statusId}"]`);
+    if (statusElement) {
+      const headerElement = statusElement.querySelector('.columnHeader h3, .columnHeader span, [class*="header"] span');
+      if (headerElement) {
+        const statusText = headerElement.textContent?.replace(/[\d\(\)\[\]]/g, '').trim();
+        return statusText || null;
+      }
+    }
+    return null;
   }
 
   getTaskTitleByKey(issueKey) {

@@ -5,6 +5,7 @@ class GitHubTaskTrackerV3 {
     this.draggedCardInfo = null;
     this.lastKnownStatus = new Map();
     this.isDisabled = false; // Extension context無効化フラグ
+    this.trackingStatus = null; // ユーザー設定の計測対象ステータス
     
     // Backlog方式の検知システム
     this.detectionStats = {
@@ -28,8 +29,10 @@ class GitHubTaskTrackerV3 {
     // Extension contextの状態をチェック
     this.checkExtensionContext();
 
-    // メイン機能を先に初期化
-    this.init();
+    // 設定を読み込んでからメイン機能を初期化
+    this.loadSettings().then(() => {
+      this.init();
+    });
     
     this.setupBackgroundMessageListener();
   }
@@ -46,6 +49,18 @@ class GitHubTaskTrackerV3 {
 
   setupBackgroundMessageListener() {
     // 必要に応じて将来的にメッセージリスナーを追加
+  }
+
+  async loadSettings() {
+    try {
+      const result = await chrome.storage.local.get(['settings']);
+      this.trackingStatus = result.settings?.trackingStatuses?.github?.start?.[0] || null;
+      console.log('[GitHub] Tracking status loaded:', this.trackingStatus);
+      console.log('[GitHub] Full settings:', result.settings?.trackingStatuses);
+    } catch (error) {
+      console.warn('[GitHub] Failed to load settings:', error);
+      this.trackingStatus = null;
+    }
   }
 
   init() {
@@ -360,20 +375,29 @@ class GitHubTaskTrackerV3 {
       if (oldStatus && oldStatus !== task.status) {
         this.changeTimestamps.set(task.id, now);
         
-        const changeInfo = {
-          taskId: task.id,
-          oldStatus: oldStatus,
-          newStatus: task.status,
-          taskTitle: task.title,
-          issueKey: task.issueKey,
-          projectName: task.projectName,
-          detectionMethod: 'mutation',
-          detectionSource: detectionSource,
-          timestamp: now
-        };
+        // ユーザー設定のステータスと比較して計測開始/終了を判定
+        const isTrackingStart = (task.status === this.trackingStatus);
+        const isTrackingEnd = (oldStatus === this.trackingStatus && task.status !== this.trackingStatus);
         
+        console.log(`[GitHub] Status change: "${oldStatus}" → "${task.status}" (tracking: "${this.trackingStatus}", start: ${isTrackingStart}, end: ${isTrackingEnd})`);
         
-        this.notifyStatusChange(changeInfo);
+        if (isTrackingStart || isTrackingEnd) {
+          const changeInfo = {
+            taskId: task.id,
+            oldStatus: oldStatus,
+            newStatus: task.status,
+            taskTitle: task.title,
+            issueKey: task.issueKey,
+            projectName: task.projectName,
+            detectionMethod: 'mutation',
+            detectionSource: detectionSource,
+            timestamp: now,
+            isTrackingStart: isTrackingStart,
+            isTrackingEnd: isTrackingEnd
+          };
+          
+          this.notifyStatusChange(changeInfo);
+        }
       }
       
       this.lastKnownStatus.set(task.id, task.status);
@@ -588,20 +612,30 @@ class GitHubTaskTrackerV3 {
         
         this.changeTimestamps.set(currentTask.id, now);
         
-        const changeInfo = {
-          taskId: originalTask.id,
-          oldStatus: originalTask.status,
-          newStatus: currentTask.status,
-          taskTitle: currentTask.title,
-          issueKey: currentTask.issueKey,
-          projectName: currentTask.projectName,
-          detectionMethod: 'pointer',
-          detectionSource: 'drag-drop',
-          timestamp: now
-        };
+        // ユーザー設定のステータスと比較して計測開始/終了を判定
+        const isTrackingStart = (currentTask.status === this.trackingStatus);
+        const isTrackingEnd = (originalTask.status === this.trackingStatus && currentTask.status !== this.trackingStatus);
         
+        console.log(`[GitHub] Pointer status change: "${originalTask.status}" → "${currentTask.status}" (tracking: "${this.trackingStatus}", start: ${isTrackingStart}, end: ${isTrackingEnd})`);
         
-        this.notifyStatusChange(changeInfo);
+        if (isTrackingStart || isTrackingEnd) {
+          const changeInfo = {
+            taskId: originalTask.id,
+            oldStatus: originalTask.status,
+            newStatus: currentTask.status,
+            taskTitle: currentTask.title,
+            issueKey: currentTask.issueKey,
+            projectName: currentTask.projectName,
+            detectionMethod: 'pointer',
+            detectionSource: 'drag-drop',
+            timestamp: now,
+            isTrackingStart: isTrackingStart,
+            isTrackingEnd: isTrackingEnd
+          };
+          
+          this.notifyStatusChange(changeInfo);
+        }
+        
         this.lastKnownStatus.set(originalTask.id, currentTask.status);
       }
     }
