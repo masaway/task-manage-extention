@@ -8,8 +8,7 @@
     "storage",
     "activeTab",
     "scripting",
-    "webRequest",
-    "notifications"
+    "webRequest"
   ],
   
   "host_permissions": [
