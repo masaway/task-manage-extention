@@ -29,14 +29,18 @@
         "*://*.backlog.com/*",
         "file:///*"
       ],
-      "js": ["src/scripts/content-backlog-v8.js"],
+      "js": [
+        "src/scripts/content-backlog-v8.js"
+      ],
       "run_at": "document_start"
     },
     {
       "matches": [
         "*://github.com/*"
       ],
-      "js": ["src/scripts/content-github-v3.js"],
+      "js": [
+        "src/scripts/content-github-v3.js"
+      ],
       "run_at": "document_start"
     }
   ],
@@ -44,7 +48,9 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "src/styles/banner-notification.css"
+        "src/icons/icon16.png",
+        "src/icons/icon48.png",
+        "src/icons/icon128.png"
       ],
       "matches": [
         "*://*.backlog.jp/*",
@@ -62,8 +68,8 @@
   "devtools_page": "src/devtools/devtools.html",
   
   "icons": {
-    "16": "src/icons/icon16.svg",
-    "48": "src/icons/icon48.svg",
-    "128": "src/icons/icon128.svg"
+    "16": "src/icons/icon16.png",
+    "48": "src/icons/icon48.png",
+    "128": "src/icons/icon128.png"
   }
 }

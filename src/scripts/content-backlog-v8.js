@@ -1,6 +1,7 @@
 class BacklogTaskTrackerV8 {
   constructor() {
     this.taskStates = new Map();
+    this.isDisabled = false; // Extension context無効化フラグ
     this.detectionMethods = {
       mutation: true,
       pointer: true
@@ -16,452 +17,34 @@ class BacklogTaskTrackerV8 {
     this.changeTimestamps = new Map(); // taskId -> timestamp
     this.debounceDelay = 100; // 100ms内の重複変更を防ぐ
 
-    // タスク検知システムを先に初期化
-    this.setupMutationObserver();
-    this.setupPointerMonitoring();
-    this.initializeTaskStates();
-    
-    // バナー通知システムを後で初期化
-    this.setupBannerNotification();
-    this.setupBackgroundMessageListener();
+    // Extension contextの状態をチェック
+    this.checkExtensionContext();
+
+    if (!this.isDisabled) {
+      // タスク検知システムを先に初期化
+      this.setupMutationObserver();
+      this.setupPointerMonitoring();
+      this.initializeTaskStates();
+      
+      this.setupBackgroundMessageListener();
+    } else {
+    }
   }
 
-  setupBannerNotification() {
-    // DOM readyを保証してからバナー通知システムを初期化
-    this.ensureDOMReady().then(() => {
-      console.log('[BacklogTracker] DOM ready confirmed, initializing banner notification');
-      if (!window.taskTrackerBanner) {
-        this.initializeBannerNotification();
-      } else {
-        console.log('[BacklogTracker] Banner notification already initialized');
-      }
-    });
-  }
-
-  async ensureDOMReady() {
-    return new Promise((resolve) => {
-      if (document.readyState === 'complete') {
-        resolve();
-      } else if (document.readyState === 'interactive') {
-        // インタラクティブなら50ms待ってから開始
-        setTimeout(resolve, 50);
-      } else {
-        document.addEventListener('DOMContentLoaded', resolve, { once: true });
-      }
-    });
-  }
-
-  initializeBannerNotification() {
-    // バナー通知システムを直接初期化
-    class BannerNotification {
-      constructor() {
-        this.currentBanner = null;
-        this.bannerQueue = [];
-        this.isShowing = false;
-        this.setupStyles();
-      }
-
-      setupStyles() {
-        if (document.getElementById('task-tracker-banner-styles')) return;
-
-        console.log('[BacklogTracker] Setting up banner styles');
-        
-        // CSPに配慮してlinkタグでCSSファイルを読み込む
-        const linkElement = document.createElement('link');
-        linkElement.id = 'task-tracker-banner-styles';
-        linkElement.rel = 'stylesheet';
-        linkElement.type = 'text/css';
-        linkElement.href = chrome.runtime.getURL('src/styles/banner-notification.css');
-        document.head.appendChild(linkElement);
-        
-        console.log('[BacklogTracker] Banner styles loaded from external CSS');
-        
-        // フォールバック: CSSファイルが読み込めない場合はインラインで設定
-        linkElement.onerror = () => {
-          console.log('[BacklogTracker] External CSS failed, falling back to inline styles');
-          this.setupInlineStyles();
-        };
-      }
-
-      setupInlineStyles() {
-        if (document.getElementById('task-tracker-banner-inline-styles')) return;
-        
-        const styles = `
-          .task-tracker-banner {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            min-width: 320px;
-            max-width: 450px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
-            z-index: 999999;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 14px;
-            line-height: 1.4;
-            transform: translateX(100%);
-            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-          }
-
-          .task-tracker-banner.show {
-            transform: translateX(0);
-          }
-
-          .task-tracker-banner.hide {
-            transform: translateX(100%);
-          }
-
-          .task-tracker-banner-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 16px 20px 12px 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-          }
-
-          .task-tracker-banner-icon {
-            font-size: 20px;
-            margin-right: 8px;
-          }
-
-          .task-tracker-banner-title {
-            display: flex;
-            align-items: center;
-            font-weight: 600;
-            font-size: 15px;
-          }
-
-          .task-tracker-banner-close {
-            background: none;
-            border: none;
-            color: rgba(255, 255, 255, 0.8);
-            cursor: pointer;
-            font-size: 18px;
-            width: 24px;
-            height: 24px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            transition: all 0.2s;
-          }
-
-          .task-tracker-banner-close:hover {
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-          }
-
-          .task-tracker-banner-content {
-            padding: 12px 20px 16px 20px;
-          }
-
-          .task-tracker-banner-task-title {
-            font-weight: 600;
-            margin-bottom: 4px;
-            color: #f0f0f0;
-          }
-
-          .task-tracker-banner-details {
-            color: rgba(255, 255, 255, 0.9);
-            font-size: 13px;
-          }
-
-          .task-tracker-banner-duration {
-            background: rgba(255, 255, 255, 0.15);
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-weight: 500;
-            margin-top: 6px;
-          }
-
-          .task-tracker-banner.start {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-          }
-
-          .task-tracker-banner.stop {
-            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-          }
-
-          .task-tracker-banner-progress {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            height: 3px;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 0 0 12px 12px;
-            animation: bannerProgress 4s linear forwards;
-          }
-
-          @keyframes bannerProgress {
-            from { width: 100%; }
-            to { width: 0%; }
-          }
-
-          .task-tracker-banner:hover .task-tracker-banner-progress {
-            animation-play-state: paused;
-          }
-
-          @media (max-width: 768px) {
-            .task-tracker-banner {
-              top: 10px;
-              right: 10px;
-              left: 10px;
-              min-width: auto;
-              max-width: none;
-            }
-          }
-        `;
-
-        const styleSheet = document.createElement('style');
-        styleSheet.id = 'task-tracker-banner-inline-styles';
-        styleSheet.textContent = styles;
-        document.head.appendChild(styleSheet);
-      }
-
-      show(options) {
-        const { type, title, taskTitle, duration, projectName } = options;
-        
-        if (this.currentBanner) {
-          this.hide(true);
-        }
-
-        this.bannerQueue.push({ type, title, taskTitle, duration, projectName });
-        
-        if (!this.isShowing) {
-          this.showNext();
-        }
-      }
-
-      showNext() {
-        if (this.bannerQueue.length === 0) {
-          this.isShowing = false;
-          return;
-        }
-
-        this.isShowing = true;
-        const options = this.bannerQueue.shift();
-        this.createBanner(options);
-      }
-
-      createBanner({ type, title, taskTitle, duration, projectName }) {
-        this.removeBanner();
-
-        const banner = document.createElement('div');
-        banner.className = `task-tracker-banner ${type}`;
-        
-        const icon = type === 'start' ? '⏰' : '✅';
-        const titleText = title || (type === 'start' ? 'タスク計測開始' : 'タスク計測終了');
-        
-        let contentHTML = `
-          <div class="task-tracker-banner-header">
-            <div class="task-tracker-banner-title">
-              <span class="task-tracker-banner-icon">${icon}</span>
-              ${titleText}
-            </div>
-            <button class="task-tracker-banner-close">×</button>
-          </div>
-          <div class="task-tracker-banner-content">
-            <div class="task-tracker-banner-task-title">${taskTitle || 'Unknown Task'}</div>
-            <div class="task-tracker-banner-details">
-        `;
-
-        if (projectName) {
-          contentHTML += `プロジェクト: ${projectName}<br>`;
-        }
-
-        if (type === 'start') {
-          contentHTML += '時間計測を開始しました';
-        } else if (type === 'stop' && duration) {
-          contentHTML += `作業時間: <span class="task-tracker-banner-duration">${this.formatDuration(duration)}</span>`;
-        } else {
-          contentHTML += '時間計測を終了しました';
-        }
-
-        contentHTML += `
-            </div>
-          </div>
-          <div class="task-tracker-banner-progress"></div>
-        `;
-
-        banner.innerHTML = contentHTML;
-        
-        banner.querySelector('.task-tracker-banner-close').addEventListener('click', () => {
-          this.hide();
-        });
-
-        banner.addEventListener('click', () => {
-          this.hide();
-        });
-
-        let hideTimeout;
-        banner.addEventListener('mouseenter', () => {
-          if (hideTimeout) {
-            clearTimeout(hideTimeout);
-            hideTimeout = null;
-          }
-        });
-
-        banner.addEventListener('mouseleave', () => {
-          hideTimeout = setTimeout(() => {
-            this.hide();
-          }, 1000);
-        });
-
-        document.body.appendChild(banner);
-        this.currentBanner = banner;
-
-        setTimeout(() => {
-          banner.classList.add('show');
-        }, 50);
-
-        hideTimeout = setTimeout(() => {
-          this.hide();
-        }, 4000);
-      }
-
-      hide(immediate = false) {
-        if (!this.currentBanner) return;
-
-        if (immediate) {
-          this.removeBanner();
-          this.showNext();
-          return;
-        }
-
-        this.currentBanner.classList.add('hide');
-        this.currentBanner.classList.remove('show');
-
-        setTimeout(() => {
-          this.removeBanner();
-          this.showNext();
-        }, 300);
-      }
-
-      removeBanner() {
-        if (this.currentBanner) {
-          if (this.currentBanner.parentNode) {
-            this.currentBanner.parentNode.removeChild(this.currentBanner);
-          }
-          this.currentBanner = null;
-        }
-      }
-
-      formatDuration(ms) {
-        const seconds = Math.floor(ms / 1000);
-        const minutes = Math.floor(seconds / 60);
-        const hours = Math.floor(minutes / 60);
-
-        if (hours > 0) {
-          return `${hours}時間${minutes % 60}分`;
-        } else if (minutes > 0) {
-          return `${minutes}分`;
-        } else {
-          return `${seconds}秒`;
-        }
-      }
-
-      async shouldShowBanner() {
-        try {
-          const response = await new Promise((resolve) => {
-            chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, resolve);
-          });
-          
-          if (response && response.success && response.settings) {
-            return response.settings.bannerNotifications !== false;
-          }
-        } catch (error) {
-          console.log('[Banner] Settings not available, using default behavior');
-        }
-        
-        return true;
-      }
-
-      async showTaskStart(taskTitle, projectName) {
-        if (await this.shouldShowBanner()) {
-          this.show({
-            type: 'start',
-            taskTitle,
-            projectName
-          });
-        }
-      }
-
-      async showTaskStop(taskTitle, duration, projectName) {
-        if (await this.shouldShowBanner()) {
-          this.show({
-            type: 'stop',
-            taskTitle,
-            duration,
-            projectName
-          });
-        }
-      }
+  checkExtensionContext() {
+    // Extension context が無効化されているかチェック
+    if (!chrome.runtime?.id) {
+      this.disableTracker();
+      return;
     }
 
-    window.taskTrackerBanner = new BannerNotification();
   }
+
 
   setupBackgroundMessageListener() {
-    // バナー通知専用のメッセージリスナーを追加
-    if (!window.backlogBannerListenerAdded) {
-      chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.type === 'SHOW_BANNER_NOTIFICATION') {
-          // Backlogサービスの通知のみ処理
-          if (message.data && message.data.service === 'backlog') {
-            console.log('[BacklogTracker] Processing banner notification for Backlog service');
-            this.handleBannerNotification(message.data);
-            sendResponse({ success: true, processed: true });
-          } else {
-            console.log('[BacklogTracker] Ignoring non-Backlog banner notification');
-            sendResponse({ success: false, processed: false });
-          }
-          return true; // 非同期レスポンスを示す
-        }
-      });
-      window.backlogBannerListenerAdded = true;
-    }
+    // 必要に応じて将来的にメッセージリスナーを追加
   }
 
-  async handleBannerNotification(data) {
-    console.log('[BacklogTracker] handleBannerNotification called with:', data);
-    const { type, taskTitle, duration, projectName } = data;
-    
-    if (window.taskTrackerBanner) {
-      console.log('[BacklogTracker] Banner object available, showing notification');
-      try {
-        if (type === 'start') {
-          console.log('[BacklogTracker] Showing start notification');
-          await window.taskTrackerBanner.showTaskStart(taskTitle, projectName);
-        } else if (type === 'stop') {
-          console.log('[BacklogTracker] Showing stop notification');
-          await window.taskTrackerBanner.showTaskStop(taskTitle, duration, projectName);
-        } else {
-          console.log('[BacklogTracker] Unknown notification type:', type);
-        }
-        console.log('[BacklogTracker] Banner notification processed successfully');
-      } catch (error) {
-        console.error('[BacklogTracker] Error showing banner notification:', error);
-      }
-    } else {
-      console.error('[BacklogTracker] Banner object not available, cannot show notification');
-      console.log('[BacklogTracker] Attempting to initialize banner now...');
-      this.initializeBannerNotification();
-      // Retry after initialization
-      setTimeout(() => {
-        if (window.taskTrackerBanner) {
-          console.log('[BacklogTracker] Retrying banner notification after delayed initialization');
-          this.handleBannerNotification(data);
-        } else {
-          console.error('[BacklogTracker] Banner initialization failed completely');
-        }
-      }, 100);
-    }
-  }
 
 
   // ==========================================
@@ -497,6 +80,11 @@ class BacklogTaskTrackerV8 {
   }
 
   handleMutations(mutations) {
+    // Extension context無効化チェック
+    if (this.isDisabled) {
+      return;
+    }
+    
     const relevantMutations = mutations.filter(mutation => this.isRelevantMutation(mutation));
     
     if (relevantMutations.length > 0) {
@@ -543,7 +131,6 @@ class BacklogTaskTrackerV8 {
            'data-rbd-draggable-id',
            'data-rbd-drag-handle-draggable-id',
            'data-rbd-droppable-id'].includes(attributeName)) {
-        console.log(`[Backlog] React Beautiful DnD attribute change: ${attributeName} on`, target);
         return true;
       }
       
@@ -562,14 +149,12 @@ class BacklogTaskTrackerV8 {
     if (mutation.type === 'childList') {
       // 列コンテナレベルでの変更を優先監視
       if (this.isKanbanColumnElement(target)) {
-        console.log('[Backlog] Column-level childList change detected:', target);
         return true;
       }
       
       // 追加された要素をチェック
       for (const node of mutation.addedNodes) {
         if (node.nodeType === 1 && this.isKanbanCardElement(node)) {
-          console.log('[Backlog] Card added to DOM:', node);
           return true;
         }
       }
@@ -577,7 +162,6 @@ class BacklogTaskTrackerV8 {
       // 削除された要素をチェック
       for (const node of mutation.removedNodes) {
         if (node.nodeType === 1 && this.isKanbanCardElement(node)) {
-          console.log('[Backlog] Card removed from DOM:', node);
           return true;
         }
       }
@@ -695,7 +279,6 @@ class BacklogTaskTrackerV8 {
   processMutationsInBatch(mutations) {
     if (this.immediateMode) {
       // 即座検知モード: バッチ処理をスキップして即座に処理
-      console.log('[Backlog] Immediate mode: processing mutations instantly');
       this.processImmediateMutations(mutations);
     } else {
       // 通常モード: リクエストアニメーションフレームで効率的に処理
@@ -715,7 +298,6 @@ class BacklogTaskTrackerV8 {
       // 列コンテナの変更の場合、その列内の全タスクをチェック
       if (this.isKanbanColumnElement(element) && !processedColumns.has(element)) {
         processedColumns.add(element);
-        console.log('[Backlog] Scanning all tasks in column due to childList change');
         this.scanAllTasksInColumn(element, 'column-immediate');
       }
       // 通常のタスク要素の変更
@@ -736,7 +318,6 @@ class BacklogTaskTrackerV8 {
       // 列コンテナの変更の場合、その列内の全タスクをチェック
       if (this.isKanbanColumnElement(element) && !processedColumns.has(element)) {
         processedColumns.add(element);
-        console.log('[Backlog] Scanning all tasks in column due to childList change (batch)');
         this.scanAllTasksInColumn(element, 'column-batch');
       }
       // 通常のタスク要素の変更
@@ -751,7 +332,6 @@ class BacklogTaskTrackerV8 {
     // 列内の全タスクカード要素を取得
     const taskElements = columnElement.querySelectorAll('*[data-react-beautiful-dnd-draggable], *[class*="card"], *[data-issue-key]');
     
-    console.log(`[Backlog] Found ${taskElements.length} task elements in column for ${detectionSource} scan`);
     
     taskElements.forEach(taskElement => {
       if (this.isKanbanCardElement(taskElement)) {
@@ -761,7 +341,6 @@ class BacklogTaskTrackerV8 {
     
     // 列内にタスクがない場合でも、削除されたタスクがないかチェック
     if (taskElements.length === 0) {
-      console.log('[Backlog] Empty column detected, checking for removed tasks');
       this.checkForRemovedTasks(columnElement);
     }
   }
@@ -787,7 +366,6 @@ class BacklogTaskTrackerV8 {
     }
     
     if (removedTasks.length > 0) {
-      console.log('[Backlog] Detected removed tasks:', removedTasks);
       // 削除されたタスクの状態をクリア
       removedTasks.forEach(({ taskId }) => {
         this.taskStates.delete(taskId);
@@ -814,7 +392,6 @@ class BacklogTaskTrackerV8 {
       
       // デバウンス: 短時間での重複変更をスキップ
       if (now - lastChangeTime < this.debounceDelay) {
-        console.log(`[Backlog] Debounced duplicate change for ${task.issueKey} (${detectionSource})`);
         return;
       }
       
@@ -835,8 +412,6 @@ class BacklogTaskTrackerV8 {
           timestamp: now
         };
         
-        console.log(`[Backlog] Status change detected (${detectionSource}):`, 
-                    `${task.issueKey}: ${oldStatus} → ${task.status} at ${new Date(now).toLocaleTimeString()}`);
         
         this.notifyStatusChange(changeInfo);
       }
@@ -905,7 +480,6 @@ class BacklogTaskTrackerV8 {
         this.pointerStartTask = task;
         // ドラッグ開始時に即座検知モードを有効化
         this.immediateMode = true;
-        console.log('[Backlog] Pointer down on task:', task.issueKey, task.status, '(immediate mode activated)');
       }
     }
   }
@@ -913,7 +487,6 @@ class BacklogTaskTrackerV8 {
   handlePointerUp(e) {
     if (this.pointerStartTask) {
       this.detectionStats.pointer++;
-      console.log('[Backlog] Pointer up, checking for status change:', this.pointerStartTask.issueKey);
       
       setTimeout(() => {
         this.processPointerDragCompletion();
@@ -922,7 +495,6 @@ class BacklogTaskTrackerV8 {
       // 即座検知モードを少し遅延させて無効化（Mutation検知との協調のため）
       setTimeout(() => {
         this.immediateMode = false;
-        console.log('[Backlog] Immediate mode deactivated');
       }, 1000);
     }
   }
@@ -953,7 +525,6 @@ class BacklogTaskTrackerV8 {
         
         // ポインター検知もデバウンスを適用
         if (now - lastChangeTime < this.debounceDelay) {
-          console.log(`[Backlog] Debounced pointer change for ${currentTask.issueKey}`);
           return;
         }
         
@@ -971,8 +542,6 @@ class BacklogTaskTrackerV8 {
           timestamp: now
         };
         
-        console.log(`[Backlog] Status change detected (pointer):`, 
-                    `${currentTask.issueKey}: ${originalTask.status} → ${currentTask.status} at ${new Date(now).toLocaleTimeString()}`);
         
         this.notifyStatusChange(changeInfo);
         this.taskStates.set(originalTask.id, currentTask.status);
@@ -1397,7 +966,6 @@ class BacklogTaskTrackerV8 {
         });
         
       } catch (error) {
-        console.log('[Backlog] Error initializing task states:', error);
       }
     };
     
@@ -1423,13 +991,17 @@ class BacklogTaskTrackerV8 {
         }
       });
     } catch (error) {
-      console.error('[Backlog] Extension context invalidated, unable to send task initialization:', error);
     }
   }
 
   notifyStatusChange(changeInfo) {
-    console.log(`[Backlog] ${changeInfo.issueKey}: ${changeInfo.oldStatus} → ${changeInfo.newStatus} (${changeInfo.detectionMethod})`);
     
+    // Extension context が無効化されているかチェック
+    if (!chrome.runtime?.id) {
+      this.disableTracker();
+      return;
+    }
+
     try {
       chrome.runtime.sendMessage({
         type: 'TASK_STATUS_CHANGED',
@@ -1444,10 +1016,97 @@ class BacklogTaskTrackerV8 {
           spaceId: changeInfo.spaceId,
           detectionMethod: changeInfo.detectionMethod
         }
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          
+          // Extension context が無効化された場合
+          if (chrome.runtime.lastError.message.includes('Extension context invalidated')) {
+            this.disableTracker();
+          }
+        } else {
+        }
       });
     } catch (error) {
-      console.error('[Backlog] Extension context invalidated, unable to send status change:', error);
+      if (error.message.includes('Extension context invalidated')) {
+        this.disableTracker();
+      }
     }
+  }
+
+  disableTracker() {
+    this.isDisabled = true;
+    
+    // MutationObserver を停止
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+    }
+    
+    // イベントリスナーを削除
+    document.removeEventListener('pointerdown', this.handlePointerDown);
+    document.removeEventListener('pointerup', this.handlePointerUp);
+    
+    
+    // ユーザーにページリロードを促すバナーを表示
+    this.showReloadBanner();
+    
+  }
+
+  showReloadBanner() {
+    // 既存のバナーがある場合は削除
+    const existingBanner = document.getElementById('task-tracker-reload-banner');
+    if (existingBanner) {
+      existingBanner.remove();
+    }
+
+    // リロードバナーを作成
+    const banner = document.createElement('div');
+    banner.id = 'task-tracker-reload-banner';
+    banner.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(90deg, #ff6b6b, #ee5a24);
+      color: white;
+      padding: 12px 20px;
+      text-align: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 999999;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      cursor: pointer;
+      animation: slideDown 0.3s ease-out;
+    `;
+
+    banner.innerHTML = `
+      ⚠️ タスクトラッカーが一時停止されました。ページをリロード(F5)してタスク追跡を再開してください。
+      <span style="margin-left: 10px; text-decoration: underline;">クリックでリロード</span>
+    `;
+
+    // クリックでページリロード
+    banner.addEventListener('click', () => {
+      window.location.reload();
+    });
+
+    // 5秒後に自動で薄く表示
+    setTimeout(() => {
+      banner.style.opacity = '0.8';
+    }, 5000);
+
+    // アニメーション用CSS
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes slideDown {
+        from { transform: translateY(-100%); }
+        to { transform: translateY(0); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    document.body.prepend(banner);
+    
   }
 
   // ==========================================
@@ -1470,18 +1129,6 @@ class BacklogTaskTrackerV8 {
   }
 
   debugCurrentState() {
-    console.group('🔍 Backlog V8 Debug Information');
-    console.log('Detection Stats:', this.getDetectionStats());
-    console.log('Task States:', Array.from(this.taskStates.entries()));
-    console.log('Detection Methods Status:', this.detectionMethods);
-    console.log('Recent Status Changes:', Array.from(this.changeTimestamps.entries()).map(([taskId, timestamp]) => ({
-      taskId,
-      lastChange: new Date(timestamp).toLocaleTimeString(),
-      timeAgo: `${Math.round((Date.now() - timestamp) / 1000)}s ago`
-    })));
-    console.log('Immediate Mode:', this.immediateMode);
-    console.log('Debounce Delay:', this.debounceDelay + 'ms');
-    console.groupEnd();
   }
 
   forceTaskScan() {
@@ -1506,7 +1153,6 @@ if (window.location.href.includes('.backlog.')) {
   window.backlogTrackerV5 = window.backlogTrackerV8;
   window.backlogTrackerV4 = window.backlogTrackerV8;
   
-  console.log('🚀 Backlog Task Tracker V8 loaded successfully!');
 }
 
 // デバッグ用グローバル関数
@@ -1538,14 +1184,12 @@ window.toggleBacklogDetection = (method, enabled) => {
 window.toggleBacklogImmediateMode = (enabled) => {
   if (window.backlogTrackerV8) {
     window.backlogTrackerV8.immediateMode = enabled;
-    console.log(`[Backlog] Immediate mode ${enabled ? 'enabled' : 'disabled'}`);
   }
 };
 
 window.setBacklogDebounceDelay = (delayMs) => {
   if (window.backlogTrackerV8) {
     window.backlogTrackerV8.debounceDelay = delayMs;
-    console.log(`[Backlog] Debounce delay set to ${delayMs}ms`);
   }
 };
 
@@ -1553,6 +1197,5 @@ window.clearBacklogChangeHistory = () => {
   if (window.backlogTrackerV8) {
     window.backlogTrackerV8.changeTimestamps.clear();
     window.backlogTrackerV8.pendingChanges.clear();
-    console.log('[Backlog] Change history cleared');
   }
 };

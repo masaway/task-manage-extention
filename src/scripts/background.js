@@ -18,12 +18,9 @@ class TaskTimeTracker {
 
   setupMessageHandlers() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      console.log('[Background] Received message:', message.type, message.data);
-      console.log('[Background] Sender tab:', sender.tab?.id, sender.tab?.url);
       
       switch (message.type) {
         case 'TASK_STATUS_CHANGED':
-          console.log('[Background] Processing TASK_STATUS_CHANGED:', message.data);
           this.handleTaskStatusChange(message.data, sender.tab);
           sendResponse({ success: true, message: 'Status change processed' });
           break;
@@ -39,7 +36,6 @@ class TaskTimeTracker {
           break;
         case 'HEARTBEAT':
           this.lastActivity = Date.now();
-          console.log(`[Background] Heartbeat received from ${message.data.url}`);
           sendResponse({ success: true, message: 'Heartbeat received' });
           break;
         case 'STOP_TIMER':
@@ -62,7 +58,6 @@ class TaskTimeTracker {
           sendResponse({ success: true, message: 'Task initialization received' });
           break;
         default:
-          console.log('[Background] Unknown message type:', message.type);
           sendResponse({ success: false, message: 'Unknown message type' });
       }
     });
@@ -79,7 +74,6 @@ class TaskTimeTracker {
             start: ['now']
           }
         },
-        notifications: true,
         excludeInactiveTime: true
       },
       timeLogs: [],
@@ -92,9 +86,11 @@ class TaskTimeTracker {
     }
   }
 
+
   async handleTaskStatusChange(data, tab) {
     const { taskId, newStatus, oldStatus, service, taskTitle, projectName, issueKey, spaceId } = data;
     const timerKey = this.getTaskKey(service, taskId, issueKey, spaceId);
+    
     
     this.lastActivity = Date.now();
     
@@ -102,7 +98,6 @@ class TaskTimeTracker {
     const serviceSettings = settings.trackingStatuses[service];
 
     if (!serviceSettings) {
-      console.log(`[Background] No settings found for service: ${service}`);
       return;
     }
 
@@ -110,7 +105,6 @@ class TaskTimeTracker {
     const wasStartStatus = oldStatus && serviceSettings.start.includes(oldStatus);
 
     if (isStartStatus && !this.activeTimers.has(timerKey)) {
-      console.log(`[Background] Timer started: ${issueKey}`);
       await this.startTimer(timerKey, {
         service,
         taskTitle,
@@ -122,8 +116,9 @@ class TaskTimeTracker {
         tabId: tab?.id
       });
     } else if (wasStartStatus && !isStartStatus && this.activeTimers.has(timerKey)) {
-      console.log(`[Background] Timer stopped: ${issueKey}`);
       await this.stopTimer(timerKey);
+    } else if (isStartStatus && this.activeTimers.has(timerKey)) {
+    } else if (!isStartStatus && !this.activeTimers.has(timerKey)) {
     }
 
     this.updateBadge();
@@ -137,13 +132,17 @@ class TaskTimeTracker {
       const settings = await this.getSettings();
       const serviceSettings = settings.trackingStatuses[service];
       if (serviceSettings && !serviceSettings.start.includes(status)) {
-        console.log(`[Background] Stopping orphaned timer: ${issueKey} (${status})`);
         await this.stopTimer(timerKey);
       }
     }
   }
 
   async startTimer(timerKey, timerData) {
+    // 重複開始チェック
+    if (this.activeTimers.has(timerKey)) {
+      return;
+    }
+
     this.activeTimers.set(timerKey, timerData);
     
     await chrome.storage.local.set({
@@ -151,24 +150,15 @@ class TaskTimeTracker {
     });
 
     const settings = await this.getSettings();
-    
-    // 既存の通知システム
-    if (settings.notifications) {
-      this.showNotification('タスク開始', `「${timerData.taskTitle}」の時間計測を開始しました`);
-    }
 
-    // バナー通知を送信
-    await this.sendBannerNotification({
-      type: 'start',
-      taskTitle: timerData.taskTitle,
-      projectName: timerData.projectName,
-      service: timerData.service
-    }, timerData.tabId);
   }
 
   async stopTimer(timerKey) {
     const timer = this.activeTimers.get(timerKey);
-    if (!timer) return;
+    if (!timer) {
+      return;
+    }
+
 
     const endTime = Date.now();
     const duration = endTime - timer.startTime;
@@ -199,20 +189,6 @@ class TaskTimeTracker {
 
     const settings = await this.getSettings();
 
-    // 既存の通知システム
-    if (settings.notifications) {
-      const durationText = this.formatDuration(duration);
-      this.showNotification('タスク完了', `「${timer.taskTitle}」の作業時間: ${durationText}`);
-    }
-
-    // バナー通知を送信
-    await this.sendBannerNotification({
-      type: 'stop',
-      taskTitle: timer.taskTitle,
-      duration: duration,
-      projectName: timer.projectName,
-      service: timer.service
-    }, timer.tabId);
   }
 
   async pauseTimer(timerKey) {
@@ -302,7 +278,6 @@ class TaskTimeTracker {
   }
 
   async restoreActiveTimers() {
-    console.log('[Background] Restoring active timers from storage');
     try {
       const { activeTimers = {} } = await chrome.storage.local.get(['activeTimers']);
       
@@ -310,18 +285,14 @@ class TaskTimeTracker {
         // タイマーが24時間以上古い場合は削除
         const hoursSinceStart = (Date.now() - timerData.startTime) / (1000 * 60 * 60);
         if (hoursSinceStart > 24) {
-          console.log(`[Background] Removing stale timer for ${timerKey} (${hoursSinceStart.toFixed(1)} hours old)`);
-          return;
+            return;
         }
         
         this.activeTimers.set(timerKey, timerData);
-        console.log(`[Background] Restored timer for ${timerKey}, running for ${this.formatDuration(Date.now() - timerData.startTime)}`);
       });
       
       this.updateBadge();
-      console.log(`[Background] Restored ${this.activeTimers.size} active timers`);
     } catch (error) {
-      console.error('[Background] Error restoring active timers:', error);
     }
   }
 
@@ -338,7 +309,6 @@ class TaskTimeTracker {
   }
 
   async performPeriodicCheck() {
-    console.log(`[Background] Periodic check: ${this.activeTimers.size} active timers`);
     
     // ストレージと同期
     await chrome.storage.local.set({
@@ -348,7 +318,6 @@ class TaskTimeTracker {
     // 各タイマーの状態をログ出力
     this.activeTimers.forEach((timer, timerKey) => {
       const duration = Date.now() - timer.startTime;
-      console.log(`[Background] Timer ${timerKey}: ${this.formatDuration(duration)} (${timer.taskTitle})`);
     });
     
     this.updateBadge();
@@ -360,7 +329,6 @@ class TaskTimeTracker {
     const now = Date.now();
     
     if (now - this.lastActivity > inactiveThreshold) {
-      console.log('[Background] Long inactivity detected, pausing timers temporarily');
       // 必要に応じてタイマーを一時停止する処理を追加
     }
     
@@ -376,22 +344,23 @@ class TaskTimeTracker {
     await chrome.storage.local.set({ settings: newSettings });
   }
 
-  updateBadge() {
+  async updateBadge() {
+    const previousCount = this.previousBadgeCount || 0;
     const activeCount = this.activeTimers.size;
+    
     chrome.action.setBadgeText({
       text: activeCount > 0 ? activeCount.toString() : ''
     });
     chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
+    
+    // バッジカウントが変更された場合
+    if (previousCount !== activeCount) {
+      this.previousBadgeCount = activeCount;
+    }
   }
 
-  showNotification(title, message) {
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: '/src/icons/icon48.svg',
-      title,
-      message
-    });
-  }
+
+
 
   calculateDuration(logs) {
     return logs.reduce((total, log) => total + log.duration, 0);
@@ -419,7 +388,6 @@ class TaskTimeTracker {
   }
 
   async clearAllTimers() {
-    console.log(`[Background] Clearing all ${this.activeTimers.size} active timers`);
     
     // 各タイマーを停止してログに記録
     const clearedTimers = [];
@@ -443,7 +411,6 @@ class TaskTimeTracker {
       };
 
       clearedTimers.push(timeLog);
-      console.log(`[Background] Cleared timer: ${timer.taskTitle} (${this.formatDuration(duration)})`);
     }
 
     // ログを保存
@@ -460,17 +427,10 @@ class TaskTimeTracker {
     });
 
     this.updateBadge();
-    
-    if ((await this.getSettings()).notifications) {
-      this.showNotification('タイマークリア', `${clearedTimers.length}個のタイマーをクリアしました`);
-    }
   }
   
   async getActiveTimers(sendResponse) {
-    console.log('[Background] Getting active timers for content script');
-    
     const activeTimersObj = Object.fromEntries(this.activeTimers);
-    console.log(`[Background] Returning ${Object.keys(activeTimersObj).length} active timers`);
     
     sendResponse({
       success: true,
@@ -479,18 +439,15 @@ class TaskTimeTracker {
   }
   
   async getSettingsForContentScript(sendResponse) {
-    console.log('[Background] Getting settings for content script');
     
     try {
       const settings = await this.getSettings();
-      console.log('[Background] Returning settings:', settings);
       
       sendResponse({
         success: true,
         settings: settings
       });
     } catch (error) {
-      console.error('[Background] Error getting settings:', error);
       sendResponse({
         success: false,
         error: error.message
@@ -500,17 +457,11 @@ class TaskTimeTracker {
 
   
   setupWebRequestListeners() {
-    console.log('[Background] Setting up webRequest listeners for Backlog API monitoring');
     
     // リクエストのヘッダーを取得
     chrome.webRequest.onBeforeSendHeaders.addListener(
       (details) => {
         if (this.isBacklogKanbanAPI(details.url)) {
-          console.log('[Background] 📤 Backlog API request headers:', {
-            url: details.url,
-            method: details.method,
-            headers: details.requestHeaders
-          });
           
           // ヘッダー情報を一時保存
           this.storeRequestInfo(details);
@@ -530,11 +481,9 @@ class TaskTimeTracker {
     // リクエスト完了時の監視
     chrome.webRequest.onCompleted.addListener(
       (details) => {
-        console.log('[Background] 🌐 Web request completed:', details.url);
         
         // Backlog Kanban APIかチェック
         if (this.isBacklogKanbanAPI(details.url)) {
-          console.log('[Background] 🎯 Backlog Kanban API detected:', details.url);
           this.handleBacklogKanbanRequest(details);
         }
       },
@@ -552,11 +501,6 @@ class TaskTimeTracker {
     chrome.webRequest.onResponseStarted.addListener(
       (details) => {
         if (this.isBacklogKanbanAPI(details.url)) {
-          console.log('[Background] 📥 Backlog API response started:', {
-            url: details.url,
-            status: details.statusCode,
-            method: details.method
-          });
         }
       },
       {
@@ -594,7 +538,6 @@ class TaskTimeTracker {
     };
     
     this.requestInfoCache.set(requestKey, requestInfo);
-    console.log('[Background] 💾 Stored request info:', requestKey);
     
     // 古いエントリを削除（5分以上古いもの）
     const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
@@ -624,7 +567,6 @@ class TaskTimeTracker {
   }
 
   async handleBacklogKanbanRequest(details) {
-    console.log('[Background] 🔄 Processing Backlog Kanban request:', details);
     
     // 保存されたリクエスト情報を取得
     const requestInfo = this.getRequestInfo(details);
@@ -637,7 +579,6 @@ class TaskTimeTracker {
       });
       
       for (const tab of tabs) {
-        console.log(`[Background] 📤 Notifying tab ${tab.id} of Kanban API request`);
         
         chrome.tabs.sendMessage(tab.id, {
           type: 'BACKLOG_API_REQUEST',
@@ -649,138 +590,22 @@ class TaskTimeTracker {
             originalTimestamp: details.timeStamp
           }
         }).catch(error => {
-          console.log(`[Background] Tab ${tab.id} not ready for messages:`, error.message);
         });
       }
     } catch (error) {
-      console.error('[Background] Error handling Kanban request:', error);
     }
   }
 
-  async sendBannerNotification(data, preferredTabId = null) {
-    console.log('[Background] Sending banner notification:', data);
-    console.log('[Background] Preferred tab ID:', preferredTabId);
-    
-    // バナー通知の重複を防ぐため、送信履歴を管理
-    const notificationKey = `${data.type}_${data.taskTitle}_${Date.now()}`;
-    if (this.recentBannerNotifications && this.recentBannerNotifications.has(notificationKey)) {
-      console.log('[Background] Duplicate banner notification prevented:', notificationKey);
-      return;
-    }
-    
-    // 最近の通知履歴を初期化（5秒間の重複を防ぐ）
-    if (!this.recentBannerNotifications) {
-      this.recentBannerNotifications = new Map();
-    }
-    this.recentBannerNotifications.set(notificationKey, Date.now());
-    
-    // 古い履歴を削除
-    const fiveSecondsAgo = Date.now() - 5000;
-    for (const [key, timestamp] of this.recentBannerNotifications.entries()) {
-      if (timestamp < fiveSecondsAgo) {
-        this.recentBannerNotifications.delete(key);
-      }
-    }
-    
-    try {
-      // 優先的に指定されたタブに送信（最優先）
-      if (preferredTabId) {
-        try {
-          console.log(`[Background] Attempting to send message to preferred tab ${preferredTabId}`);
-          await chrome.tabs.sendMessage(preferredTabId, {
-            type: 'SHOW_BANNER_NOTIFICATION',
-            data: data
-          });
-          console.log(`[Background] Banner notification sent successfully to preferred tab ${preferredTabId}`);
-          return;
-        } catch (error) {
-          console.log(`[Background] Preferred tab ${preferredTabId} not available:`, error.message);
-        }
-      }
-
-      // サービスに応じて適切なタブを探す（厳密にサービスを一致させる）
-      let urlPatterns = [];
-      if (data.service === 'backlog') {
-        urlPatterns = ["*://*.backlog.jp/*", "*://*.backlog.com/*"];
-      } else if (data.service === 'github') {
-        urlPatterns = ["*://github.com/*"];
-      } else {
-        console.log('[Background] Unknown service, using fallback notification');
-        this.sendFallbackNotification(data);
-        return;
-      }
-
-      console.log('[Background] Looking for tabs with URL patterns:', urlPatterns);
-      const tabs = await chrome.tabs.query({
-        url: urlPatterns,
-        status: 'complete' // 完全に読み込まれたタブのみ
-      });
-      console.log('[Background] Found tabs:', tabs.length);
-
-      // アクティブなタブを優先
-      const activeTabs = tabs.filter(tab => tab.active);
-      const inactiveTabs = tabs.filter(tab => !tab.active);
-      const prioritizedTabs = [...activeTabs, ...inactiveTabs];
-
-      for (const tab of prioritizedTabs) {
-        console.log(`[Background] Trying to send to tab ${tab.id}: ${tab.url} (active: ${tab.active})`);
-        try {
-          await chrome.tabs.sendMessage(tab.id, {
-            type: 'SHOW_BANNER_NOTIFICATION',
-            data: data
-          });
-          console.log(`[Background] Banner notification sent successfully to tab ${tab.id} (${tab.url})`);
-          return; // 1つのタブに送信できたら終了
-        } catch (error) {
-          console.log(`[Background] Tab ${tab.id} not ready for banner notification:`, error.message);
-        }
-      }
-
-      // どのタブにも送信できなかった場合はフォールバック通知
-      console.log('[Background] No suitable tabs found for banner notification');
-      this.sendFallbackNotification(data);
-      
-    } catch (error) {
-      console.error('[Background] Error sending banner notification:', error);
-      this.sendFallbackNotification(data);
-    }
-  }
-
-  sendFallbackNotification(data) {
-    try {
-      const notificationTitle = data.type === 'start' ? 'タスク計測開始' : 'タスク計測終了';
-      let message = `${data.taskTitle}`;
-      
-      if (data.type === 'stop' && data.duration) {
-        const durationText = this.formatDuration(data.duration);
-        message += ` - 作業時間: ${durationText}`;
-      }
-      
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: '/src/icons/icon48.svg',
-        title: notificationTitle,
-        message: message
-      });
-      
-      console.log('[Background] Fallback notification sent via chrome.notifications');
-    } catch (error) {
-      console.error('[Background] Error sending fallback notification:', error);
-    }
-  }
 }
 
 // Service Worker startup/install events
 chrome.runtime.onStartup.addListener(() => {
-  console.log('[Background] Extension startup detected');
   new TaskTimeTracker();
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[Background] Extension installed/updated');
   new TaskTimeTracker();
 });
 
 // Always initialize on script load
-console.log('[Background] Background script loaded');
 new TaskTimeTracker();
