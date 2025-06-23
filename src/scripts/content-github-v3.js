@@ -42,12 +42,10 @@ class GitHubTaskTrackerV3 {
       return;
     }
 
-    console.log('[GitHub] Extension context check completed');
   }
 
   setupBackgroundMessageListener() {
     // 必要に応じて将来的にメッセージリスナーを追加
-    console.log('[GitHubTracker] Background message listener setup completed');
   }
 
   init() {
@@ -374,8 +372,6 @@ class GitHubTaskTrackerV3 {
           timestamp: now
         };
         
-        console.log(`[GitHub] Status change detected (${detectionSource}):`, 
-                    `${task.issueKey}: ${oldStatus} → ${task.status} at ${new Date(now).toLocaleTimeString()}`);
         
         this.notifyStatusChange(changeInfo);
       }
@@ -425,7 +421,6 @@ class GitHubTaskTrackerV3 {
     
     // 同じ変更が最近送信されている場合はスキップ（5秒間）
     if (lastNotification && (now - lastNotification.timestamp) < 5000) {
-      console.log(`[GitHub] ⚠️ Skipping duplicate notification for ${changeInfo.issueKey}: ${changeInfo.oldStatus} → ${changeInfo.newStatus}`);
       return;
     }
     
@@ -463,7 +458,9 @@ class GitHubTaskTrackerV3 {
     
     // github-page.htmlの実際の構造に基づく要素取得
     const issueKeyElement = element.querySelector('.header-module__Text--apTHb');
-    const titleElement = element.querySelector('.title-module__SanitizedHtml_1--dvKYp');
+    // 複数のタイトルセレクタに対応（通常状態とMerged状態）
+    const titleElement = element.querySelector('.title-module__SanitizedHtml_1--dvKYp') ||
+                        element.querySelector('.prc-Text-Text-0ima0');
     
     const fullIssueText = issueKeyElement ? issueKeyElement.textContent.trim() : null;
     const title = titleElement ? titleElement.textContent.trim() : null;
@@ -603,8 +600,6 @@ class GitHubTaskTrackerV3 {
           timestamp: now
         };
         
-        console.log(`[GitHub] Status change detected (pointer):`, 
-                    `${currentTask.issueKey}: ${originalTask.status} → ${currentTask.status} at ${new Date(now).toLocaleTimeString()}`);
         
         this.notifyStatusChange(changeInfo);
         this.lastKnownStatus.set(originalTask.id, currentTask.status);
@@ -679,7 +674,6 @@ class GitHubTaskTrackerV3 {
   }
 
   sendStatusChange(data) {
-    console.log('[GitHub] Sending status change to background:', data);
     
     // Extension context が無効化されているかチェック
     if (!chrome.runtime?.id) {
@@ -700,17 +694,14 @@ class GitHubTaskTrackerV3 {
           
           // Extension context が無効化された場合
           if (chrome.runtime.lastError.message.includes('Extension context invalidated')) {
-            console.log('[GitHub] Extension context invalidated, tracker will be disabled until page reload');
             this.disableTracker();
           }
         } else {
-          console.log('[GitHub] Status change sent successfully:', response);
         }
       });
     } catch (error) {
       console.error('[GitHub] Exception while sending status change:', error);
       if (error.message.includes('Extension context invalidated')) {
-        console.log('[GitHub] Extension context invalidated, tracker will be disabled until page reload');
         this.disableTracker();
       }
     }
@@ -755,7 +746,6 @@ class GitHubTaskTrackerV3 {
   }
 
   disableTracker() {
-    console.log('[GitHub] Disabling tracker due to extension context invalidation');
     this.isDisabled = true;
     
     // MutationObserver を停止
@@ -772,7 +762,6 @@ class GitHubTaskTrackerV3 {
     // ユーザーにページリロードを促すバナーを表示
     this.showReloadBanner();
     
-    console.log('[GitHub] Tracker disabled. Page reload required to re-enable task tracking.');
   }
 
   showReloadBanner() {
@@ -830,7 +819,6 @@ class GitHubTaskTrackerV3 {
 
     document.body.prepend(banner);
     
-    console.log('[GitHub] Reload banner displayed');
   }
 }
 
