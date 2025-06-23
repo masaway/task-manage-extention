@@ -52,10 +52,7 @@ class BacklogTaskTrackerV8 {
     try {
       const result = await chrome.storage.local.get(['settings']);
       this.trackingStatus = result.settings?.trackingStatuses?.backlog?.start?.[0] || null;
-      console.log('[Backlog] Tracking status loaded:', this.trackingStatus);
-      console.log('[Backlog] Full settings:', result.settings?.trackingStatuses);
     } catch (error) {
-      console.warn('[Backlog] Failed to load settings:', error);
       this.trackingStatus = null;
     }
   }
@@ -419,7 +416,6 @@ class BacklogTaskTrackerV8 {
         const isTrackingStart = (task.status === this.trackingStatus);
         const isTrackingEnd = (oldStatus === this.trackingStatus && task.status !== this.trackingStatus);
         
-        console.log(`[Backlog] Status change: "${oldStatus}" → "${task.status}" (tracking: "${this.trackingStatus}", start: ${isTrackingStart}, end: ${isTrackingEnd})`);
         
         if (isTrackingStart || isTrackingEnd) {
           const changeInfo = {
@@ -558,7 +554,6 @@ class BacklogTaskTrackerV8 {
         const isTrackingStart = (currentTask.status === this.trackingStatus);
         const isTrackingEnd = (originalTask.status === this.trackingStatus && currentTask.status !== this.trackingStatus);
         
-        console.log(`[Backlog] Pointer status change: "${originalTask.status}" → "${currentTask.status}" (tracking: "${this.trackingStatus}", start: ${isTrackingStart}, end: ${isTrackingEnd})`);
         
         if (isTrackingStart || isTrackingEnd) {
           const changeInfo = {

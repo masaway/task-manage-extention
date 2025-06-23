@@ -64,7 +64,6 @@
     "default_title": "Task Time Tracker"
   },
   
-  "devtools_page": "src/devtools/devtools.html",
   
   "icons": {
     "16": "src/icons/icon16.png",

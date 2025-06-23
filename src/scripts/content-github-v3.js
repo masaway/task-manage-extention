@@ -55,10 +55,7 @@ class GitHubTaskTrackerV3 {
     try {
       const result = await chrome.storage.local.get(['settings']);
       this.trackingStatus = result.settings?.trackingStatuses?.github?.start?.[0] || null;
-      console.log('[GitHub] Tracking status loaded:', this.trackingStatus);
-      console.log('[GitHub] Full settings:', result.settings?.trackingStatuses);
     } catch (error) {
-      console.warn('[GitHub] Failed to load settings:', error);
       this.trackingStatus = null;
     }
   }
@@ -379,7 +376,6 @@ class GitHubTaskTrackerV3 {
         const isTrackingStart = (task.status === this.trackingStatus);
         const isTrackingEnd = (oldStatus === this.trackingStatus && task.status !== this.trackingStatus);
         
-        console.log(`[GitHub] Status change: "${oldStatus}" → "${task.status}" (tracking: "${this.trackingStatus}", start: ${isTrackingStart}, end: ${isTrackingEnd})`);
         
         if (isTrackingStart || isTrackingEnd) {
           const changeInfo = {
@@ -616,7 +612,6 @@ class GitHubTaskTrackerV3 {
         const isTrackingStart = (currentTask.status === this.trackingStatus);
         const isTrackingEnd = (originalTask.status === this.trackingStatus && currentTask.status !== this.trackingStatus);
         
-        console.log(`[GitHub] Pointer status change: "${originalTask.status}" → "${currentTask.status}" (tracking: "${this.trackingStatus}", start: ${isTrackingStart}, end: ${isTrackingEnd})`);
         
         if (isTrackingStart || isTrackingEnd) {
           const changeInfo = {

@@ -1,0 +1,22 @@
+# GitHub Pages configuration for Task Time Tracker
+
+title: Task Time Tracker
+description: Backlog・GitHubの作業時間を自動計測するChrome拡張機能
+
+# GitHub Pages settings
+theme: minima
+plugins:
+  - jekyll-feed
+  - jekyll-sitemap
+
+# Site settings
+lang: ja
+url: "https://masaway.github.io"
+baseurl: "/task-manage-extention"
+
+# Author settings
+author:
+  name: Task Time Tracker Development Team
+
+# SEO settings
+google_analytics: # Add Google Analytics ID if needed
