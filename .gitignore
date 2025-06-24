@@ -1,0 +1,30 @@
+# Claude Code関連ファイル
+.claude/
+CLAUDE.md
+
+# Chrome Web Store登録用ドキュメント（開発用）
+privacy-policy.md
+store-description.md
+
+# 一時ファイル・ログ
+*.log
+*.tmp
+
+# OS固有ファイル
+.DS_Store
+Thumbs.db
+
+# エディタ固有ファイル
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node.js (将来的に追加する場合)
+node_modules/
+npm-debug.log*
+
+# 画像作業ファイル
+*.psd
+*.ai
+*.sketch
