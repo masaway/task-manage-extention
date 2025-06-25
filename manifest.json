@@ -6,9 +6,7 @@
   
   "permissions": [
     "storage",
-    "activeTab",
-    "scripting",
-    "webRequest"
+    "activeTab"
   ],
   
   "host_permissions": [

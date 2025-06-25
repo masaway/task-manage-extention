@@ -5,7 +5,7 @@ class TaskTimeTracker {
     this.setupMessageHandlers();
     this.setupStorageDefaults();
     this.setupPeriodicChecks();
-    this.setupWebRequestListeners();
+    // webRequest監視は削除（Chrome Web Store審査対応）
     this.restoreActiveTimers();
   }
 
@@ -455,146 +455,8 @@ class TaskTimeTracker {
     }
   }
 
-  
-  setupWebRequestListeners() {
-    
-    // リクエストのヘッダーを取得
-    chrome.webRequest.onBeforeSendHeaders.addListener(
-      (details) => {
-        if (this.isBacklogKanbanAPI(details.url)) {
-          
-          // ヘッダー情報を一時保存
-          this.storeRequestInfo(details);
-        }
-      },
-      {
-        urls: [
-          "*://*.backlog.jp/board-api/kanban*",
-          "*://*.backlog.com/board-api/kanban*",
-          "*://*.backlog.jp/api/*kanban*",
-          "*://*.backlog.com/api/*kanban*"
-        ]
-      },
-      ['requestHeaders']
-    );
-    
-    // リクエスト完了時の監視
-    chrome.webRequest.onCompleted.addListener(
-      (details) => {
-        
-        // Backlog Kanban APIかチェック
-        if (this.isBacklogKanbanAPI(details.url)) {
-          this.handleBacklogKanbanRequest(details);
-        }
-      },
-      {
-        urls: [
-          "*://*.backlog.jp/board-api/kanban*",
-          "*://*.backlog.com/board-api/kanban*",
-          "*://*.backlog.jp/api/*kanban*",
-          "*://*.backlog.com/api/*kanban*"
-        ]
-      }
-    );
-    
-    // レスポンスボディを取得するためのリスナー
-    chrome.webRequest.onResponseStarted.addListener(
-      (details) => {
-        if (this.isBacklogKanbanAPI(details.url)) {
-        }
-      },
-      {
-        urls: [
-          "*://*.backlog.jp/board-api/kanban*",
-          "*://*.backlog.com/board-api/kanban*",
-          "*://*.backlog.jp/api/*kanban*",
-          "*://*.backlog.com/api/*kanban*"
-        ]
-      }
-    );
-    
-    // リクエスト情報の一時保存用
-    this.requestInfoCache = new Map();
-  }
-  
-  isBacklogKanbanAPI(url) {
-    if (!url) return false;
-    
-    const patterns = [
-      /https?:\/\/[^\/]+\.backlog\.(com|jp)\/board-api\/kanban/,
-      /https?:\/\/[^\/]+\.backlog\.(com|jp)\/api\/.*kanban/
-    ];
-    
-    return patterns.some(pattern => pattern.test(url));
-  }
-  
-  storeRequestInfo(details) {
-    const requestKey = `${details.method}:${details.url}:${details.timeStamp}`;
-    const requestInfo = {
-      url: details.url,
-      method: details.method,
-      headers: details.requestHeaders,
-      timestamp: details.timeStamp
-    };
-    
-    this.requestInfoCache.set(requestKey, requestInfo);
-    
-    // 古いエントリを削除（5分以上古いもの）
-    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-    for (const [key, info] of this.requestInfoCache.entries()) {
-      if (info.timestamp < fiveMinutesAgo) {
-        this.requestInfoCache.delete(key);
-      }
-    }
-  }
-  
-  getRequestInfo(details) {
-    // 同じURLとメソッドで最も近い時間のリクエスト情報を探す
-    let bestMatch = null;
-    let minTimeDiff = Infinity;
-    
-    for (const [key, info] of this.requestInfoCache.entries()) {
-      if (info.url === details.url && info.method === details.method) {
-        const timeDiff = Math.abs(details.timeStamp - info.timestamp);
-        if (timeDiff < minTimeDiff) {
-          minTimeDiff = timeDiff;
-          bestMatch = info;
-        }
-      }
-    }
-    
-    return bestMatch;
-  }
-
-  async handleBacklogKanbanRequest(details) {
-    
-    // 保存されたリクエスト情報を取得
-    const requestInfo = this.getRequestInfo(details);
-    
-    // content scriptに通知を送信（ヘッダー情報も含む）
-    try {
-      // アクティブなBacklogタブを探す
-      const tabs = await chrome.tabs.query({
-        url: ["*://*.backlog.jp/*", "*://*.backlog.com/*"]
-      });
-      
-      for (const tab of tabs) {
-        
-        chrome.tabs.sendMessage(tab.id, {
-          type: 'BACKLOG_API_REQUEST',
-          data: {
-            url: details.url,
-            method: details.method,
-            headers: requestInfo?.headers || [],
-            timestamp: Date.now(),
-            originalTimestamp: details.timeStamp
-          }
-        }).catch(error => {
-        });
-      }
-    } catch (error) {
-    }
-  }
+  // webRequest関連の機能は削除（Chrome Web Store審査対応）
+  // DOM監視ベースの検知機能で十分に動作するため
 
 }
 
